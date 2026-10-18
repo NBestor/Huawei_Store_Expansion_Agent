@@ -5,6 +5,7 @@ import { generate } from '../lib/workflow.mjs';
 import { createApp } from '../server.mjs';
 import { HistoryStore } from '../lib/store.mjs';
 import { normalizeVerification, sourceChunks } from '../lib/verification.mjs';
+import { dependency } from '../lib/dependencies.mjs';
 
 test('CSV preserves quoted commas and escaped quotes', () => { assert.deepEqual(parseCsv('a,b\n"one,two","say ""yes"""\n'), [{ a: 'one,two', b: 'say "yes"' }]); });
 test('real reference evidence, platform image counts and honest pending checks', async () => {
@@ -37,7 +38,14 @@ test('HTTP validates incomplete tasks, blocks ima rule fallback, and serves actu
     assert.equal(editedResponse.status, 200); const edited = await editedResponse.json(); assert.equal(edited.version, 2); assert.equal(edited.title, `${draft.title} 新版`);
     const stale = await fetch(`${base}/api/sessions/${draft.sessionId}/checkout`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ expectedRevision: draft.revision, version: 1 }) }); assert.equal(stale.status, 409);
     const restored = await (await fetch(`${base}/api/sessions/${draft.sessionId}/checkout`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ expectedRevision: edited.revision, version: 1 }) })).json(); assert.equal(restored.title, draft.title); assert.equal(restored.versions.length, 2);
-    const exported = await fetch(`${base}/api/sessions/${draft.sessionId}/export`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ expectedRevision: restored.revision }) }); assert.equal(exported.status, 200); assert.match((await exported.json()).content, /事实核验报告/);
+    const exported = await fetch(`${base}/api/sessions/${draft.sessionId}/export`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ expectedRevision: restored.revision }) });
+    assert.equal(exported.status, 200); assert.match(exported.headers.get('content-type'), /application\/pdf/);
+    assert.match(exported.headers.get('content-disposition'), /\.pdf/);
+    const bytes = Buffer.from(await exported.arrayBuffer()); assert.equal(bytes.subarray(0, 5).toString(), '%PDF-');
+    const parsed = await dependency('pdf-lib').PDFDocument.load(bytes);
+    assert.ok(parsed.getPageCount() >= draft.images.length + 3, 'PDF includes the cover, copy, image pages, and source page');
+    const imageObjects = parsed.context.enumerateIndirectObjects().filter(([, object]) => object?.dict?.get?.(dependency('pdf-lib').PDFName.of('Subtype'))?.toString() === '/Image');
+    assert.ok(imageObjects.length >= draft.images.length, 'all selected photos are embedded as image objects');
     const image = await fetch(`${base}${draft.images[0].url}`); assert.equal(image.status, 200); assert.match(image.headers.get('content-type'), /image/);
     assert.equal((await fetch(`${base}/api/image?path=../../package.json`)).status, 400);
     assert.equal((await fetch(base)).status, 200);

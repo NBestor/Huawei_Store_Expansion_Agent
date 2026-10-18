@@ -2,6 +2,12 @@ const limits = { xiaohongshu: [3, 6], wechat: [2, 4], moments: [1, 3] };
 export const contentFields = ['title', 'body', 'cta', 'tags'];
 export function contentOf(draft) { return Object.fromEntries(contentFields.map(key => [key, String(draft[key] || '')])); }
 export function contentChanged(draft, original) { return contentFields.some(key => draft[key] !== original[key]); }
+// Keep the complete report in storage. This is only the user's review queue.
+export function reviewClaims(report) {
+  return (report?.claims || []).filter(claim => claim.status === 'conflict' ||
+    claim.status === 'verified' && claim.evidence?.some(cite => cite.kind === 'web') &&
+    !claim.evidence?.some(cite => ['local', 'ima'].includes(cite.kind)));
+}
 // Shared by server and UI: warnings allow a draft export, conflicts and stale checks never do.
 export function exportGate({ draft, platform, loaded, dirty = false, busy = false }) {
   if (!draft) return { allowed: false, reason: '请先生成或打开历史草稿。' };
@@ -15,5 +21,5 @@ export function exportGate({ draft, platform, loaded, dirty = false, busy = fals
   if (contentFields.some(key => report.content?.[key] !== draft[key])) return { allowed: false, reason: '内容已改变，需对当前版本重新核验。' };
   if (report.status === 'conflict' || report.claims?.some(claim => claim.status === 'conflict')) return { allowed: false, reason: '存在与资料冲突的事实，请修改后重新核验。人工确认不能绕过。' };
   if (!['verified', 'warning'].includes(report.status)) return { allowed: false, reason: '核验状态无效，请重新核验。' };
-  return { allowed: true, reason: report.status === 'warning' ? '有待确认警告，可查看依据后自行决定导出。' : '事实核验完成，可导出草稿。' };
+  return { allowed: true, reason: '当前版本可导出图文 PDF。' };
 }

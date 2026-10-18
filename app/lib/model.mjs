@@ -63,9 +63,22 @@ export class DeepSeekAdapter {
     const index = await tools.index(), docs = fresh ? (evidence.documents || []).filter(doc => doc.kind !== 'local') : [...(evidence.documents || [])];
     const trace = [...(evidence.trace || [])], attempted = new Set();
     const deadline = Date.now() + 180000;
+    if (task.autoWeb !== false) {
+      const candidates = await tools.discover();
+      if (!candidates.length) trace.push({ action: 'discover_url', result: '赛事官方来源表中未发现当前型号的商城商品页', at: new Date().toISOString() });
+      for (const target of candidates) {
+        if (docs.some(doc => doc.path === target)) continue;
+        try {
+          docs.push(await tools.web(target));
+          trace.push({ action: 'read_url', target, result: '已自动发现并读取当前型号商城页', at: new Date().toISOString() });
+        } catch (error) {
+          trace.push({ action: 'read_url', target, result: `自动商城检索：${safeError(error)}`, at: new Date().toISOString() });
+        }
+      }
+    }
     const completeLocalContext = index.every(item => docs.some(doc => doc.path === item.path));
     for (let round = 0; (!completeLocalContext || tools.urls.length > 0) && round < 6 && Date.now() < deadline; round++) {
-      const decision = await this.json('你是产品事实检索Agent。只从目录读取当前型号P1产品事实和卖点限制；不读取P6/P8，不搜索互联网。按需要一次请求一个工具：{"action":"read_file","path":"目录中的精确路径"} 或 {"action":"read_url","url":"providedUrls中的精确链接"}。证据足够则 {"action":"ready"}。不得重复读已读取或失败的路径。网页仅提供URL可读且须核对型号与条件。',
+      const decision = await this.json('你是产品事实检索Agent。只从目录读取当前型号P1产品事实和卖点限制；不读取P6/P8，不自行编造或搜索URL。系统会自动发现当前型号的华为商城链接。按需要一次请求一个工具：{"action":"read_file","path":"目录中的精确路径"} 或 {"action":"read_url","url":"providedUrls中的精确链接"}。证据足够则 {"action":"ready"}。不得重复读已读取或失败的路径。网页须核对型号与条件。',
         { product: evidence.product, task, purpose, draft: draft ? { title: draft.title, body: draft.body, cta: draft.cta, tags: draft.tags } : undefined,
           index, providedUrls: tools.urls, sources: docs.map(doc => ({ path: doc.path, kind: doc.kind, text: doc.text })), previousToolResults: trace.slice(-8) }, { timeoutMs: Math.max(1, deadline - Date.now()) });
       if (decision.action === 'ready') break;

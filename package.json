@@ -4,5 +4,6 @@
   "private": true,
   "type": "module",
   "engines": { "node": ">=24" },
+  "dependencies": { "pdf-lib": "^1.17.1", "sharp": "^0.34.3" },
   "scripts": { "start": "node app/server.mjs", "test": "node --test --test-isolation=none app/test/*.test.mjs" }
 }

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { evidence, products, within, knowledgeRoot } from './local.mjs';
 import { platforms, generate } from './workflow.mjs';
 import { FactTools, vmallUrl } from './knowledge.mjs';
@@ -7,6 +8,7 @@ import { fields, contentOf, selection, mergeManual, mergeReplacement, addLock } 
 import { finalize, offlineVerification, failedVerification } from './verification.mjs';
 import { safeError } from './config.mjs';
 import { exportGate } from '../public/review.js';
+import { renderPlanPdf } from './pdf.mjs';
 
 export class Studio {
   constructor(store, model, ima) { this.store = store; this.model = model; this.ima = ima; this.busy = new Set(); }
@@ -26,7 +28,7 @@ export class Studio {
     const product = (await products()).find(item => item.id === value.productId);
     if (!product) throw problem('请选择有效产品。');
     const webUrls = (value.webUrls || []).map(vmallUrl);
-    return { product, task: { productId: product.id, audience: value.audience.trim(), scene: value.scene.trim(), platform: value.platform, mode: value.mode || 'local', engine: value.engine || 'rules', revision: value.revision || '', webUrls } };
+    return { product, task: { productId: product.id, audience: value.audience.trim(), scene: value.scene.trim(), platform: value.platform, mode: value.mode || 'local', engine: value.engine || 'rules', revision: value.revision || '', webUrls, autoWeb: value.autoWeb !== false } };
   }
   async create(value) {
     const { product, task } = await this.validateTask(value);
@@ -99,21 +101,21 @@ export class Studio {
     return present(this.store.checkout(id, input.expectedRevision, input.version));
   }
   async export(id, input) {
-    const session = this.store.assertCurrent(id, input.expectedRevision), draft = session.snapshot.draft;
-    const gate = exportGate({ draft, platform: session.task.platform });
-    if (!gate.allowed) throw problem(gate.reason, 409);
-    for (const image of draft.images) {
-      if (image.url.startsWith('/api/assets/')) this.store.asset(image.url.split('/').pop());
-      else if (image.url.startsWith('/api/image?')) await within(knowledgeRoot, new URL(image.url, 'http://localhost').searchParams.get('path'));
-      else throw problem('图片尚未持久化，不能导出。', 409);
-    }
-    const exportedAt = this.store.markExport(id, input.expectedRevision);
-    const content = [draft.label, `会话：${id} / 版本 V${session.version}\n导出时间：${exportedAt}`, draft.title, draft.body, draft.cta, draft.tags,
-      '事实核验报告（警告不代表已核验，模型核验不替代人工判断）', draft.verification.summary,
-      ...draft.verification.claims.map(claim => `${{ verified: '✅ 已核验', warning: '⚠ 待确认', conflict: '❌ 冲突' }[claim.status]} ${claim.statement}\n${claim.explanation}\n${claim.evidence.map(cite => `${cite.path}\n原文：${cite.quote}`).join('\n')}`),
-      '配图方案', ...draft.images.map(image => `${image.name}\n${image.position}\n${image.description}\n来源：${image.source}`),
-      '任务设置', JSON.stringify(session.task, null, 2), '选中卖点', JSON.stringify(session.snapshot.points, null, 2),
-      '来源依据快照', draft.evidence.facts].join('\n\n');
-    return { filename: `营销图文方案-V${session.version}.txt`, content, exportedAt };
+    return this.exclusive(id, async () => {
+      const session = this.store.assertCurrent(id, input.expectedRevision), draft = session.snapshot.draft;
+      const gate = exportGate({ draft, platform: session.task.platform });
+      if (!gate.allowed) throw problem(gate.reason, 409);
+      const images = [];
+      for (const image of draft.images) {
+        let buffer;
+        if (image.url.startsWith('/api/assets/')) buffer = this.store.asset(image.url.split('/').pop()).data;
+        else if (image.url.startsWith('/api/image?')) buffer = await readFile(await within(knowledgeRoot, new URL(image.url, 'http://localhost').searchParams.get('path')));
+        else throw problem('图片尚未持久化，不能导出。', 409);
+        images.push({ ...image, buffer });
+      }
+      const exportedAt = new Date().toISOString(), content = await renderPlanPdf(session, images, exportedAt);
+      this.store.markExport(id, input.expectedRevision);
+      return { filename: `营销图文方案-V${session.version}.pdf`, content, exportedAt };
+    });
   }
 }

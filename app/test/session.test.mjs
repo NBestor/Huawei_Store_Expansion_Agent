@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { HistoryStore, present } from '../lib/store.mjs';
 import { addLock, mergeManual, mergeReplacement } from '../lib/editor.mjs';
 import { normalizeVerification } from '../lib/verification.mjs';
-import { FactTools, vmallUrl } from '../lib/knowledge.mjs';
+import { discoverVmall, FactTools, fetchVmall, vmallUrl } from '../lib/knowledge.mjs';
 import { products } from '../lib/local.mjs';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -72,5 +72,39 @@ test('P1 tool index is product scoped and vmall whitelist is exact', async () =>
   assert.match((await tools.read(index[0].path)).text, /./);
   assert.equal(vmallUrl('https://www.vmall.com/test#part'), 'https://www.vmall.com/test');
   assert.throws(() => vmallUrl('https://evil.example/?next=https://www.vmall.com/'));
-  assert.throws(() => vmallUrl('https://item.vmall.com/test'));
+  assert.equal(vmallUrl('https://item.vmall.com/test'), 'https://item.vmall.com/test');
+  assert.throws(() => vmallUrl('https://vmall.com/test'));
+  assert.throws(() => vmallUrl('https://www.vmall.com.evil.example/test'));
+  assert.throws(() => vmallUrl('http://www.vmall.com/test'));
+});
+test('automatic discovery uses exact product rows and reads only matching vmall product pages', async () => {
+  const product = (await products()).find(item => item.name === 'HUAWEI MateBook 14（鸿蒙版）');
+  const [url] = await discoverVmall(product);
+  assert.match(url, /^https:\/\/item\.vmall\.com\/product\/comdetail\//);
+  assert.match(url, /prdId=10086097339191/);
+  const html = '<html><title>HUAWEI MateBook 14 鸿蒙版</title><body>HUAWEI MateBook 14 鸿蒙版，适用于移动学习与日常办公。查看商品详细介绍。</body></html>';
+  const page = await fetchVmall(url, async () => new Response(html, { headers: { 'Content-Type': 'text/html; charset=utf-8' } }), product);
+  assert.equal(page.kind, 'web'); assert.match(page.text, /MateBook 14/);
+  await assert.rejects(fetchVmall(url, async () => new Response('<title>MateBook D 16</title><body>MateBook D 16 是另一款产品。商品页面信息完整可读。</body>', { headers: { 'Content-Type': 'text/html' } }), product), /不匹配/);
+  await assert.rejects(fetchVmall(url, async () => new Response(null, { status: 302, headers: { location: 'https://evil.example/' } }), product), /仅允许/);
+});
+
+test('vmall page matching preserves OS, edition, and D-series model identity', async () => {
+  const all = await products(), url = 'https://item.vmall.com/product/test';
+  const response = text => async () => new Response(`<title>${text}</title><body>${text} 商品详细介绍与产品功能说明。</body>`, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+  for (const product of all) {
+    assert.ok((await discoverVmall(product)).length, `${product.name} has an exact official catalog URL`);
+    assert.equal((await fetchVmall(url, response(product.name), product)).kind, 'web', `${product.name} matches itself`);
+  }
+  const harmony = all.find(item => item.name === 'HUAWEI MateBook 14（鸿蒙版）');
+  assert.equal((await fetchVmall(url, response('HUAWEI MateBook 14 HarmonyOS'), harmony)).kind, 'web');
+  await assert.rejects(fetchVmall(url, response('HUAWEI MateBook 14 酷睿 Ultra'), harmony), /不匹配/);
+
+  const d14 = all.find(item => item.name === 'HUAWEI MateBook D 14 2024');
+  assert.equal((await fetchVmall(url, response('HUAWEI MateBook D 14 2024'), d14)).kind, 'web');
+  await assert.rejects(fetchVmall(url, response('HUAWEI MateBook 14'), d14), /不匹配/);
+
+  const fold = all.find(item => item.name === 'HUAWEI MateBook Fold 非凡大师');
+  assert.equal((await fetchVmall(url, response('HUAWEI MateBook Fold Ultimate Design'), fold)).kind, 'web');
+  await assert.rejects(fetchVmall(url, response('HUAWEI MateBook Fold'), fold), /不匹配/);
 });

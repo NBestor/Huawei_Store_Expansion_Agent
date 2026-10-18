@@ -76,3 +76,65 @@ html,body{height:100%;overflow:hidden;scroll-behavior:auto}
   .view-panel.is-entering{animation:none}
   .sidebar,.menu-open .sidebar{transition:none}
 }
+
+/* ima is a scored integration, so its capability and real configuration state stay visible. */
+.ima-capability{background:#191b1d;color:#f4f5f1;padding:56px 7%}
+.ima-capability-inner{max-width:1380px;margin:auto;display:grid;grid-template-columns:minmax(0,1.35fr) minmax(280px,.65fr);gap:8%;align-items:start}
+.ima-capability .eyebrow{color:#a9c27f;margin-bottom:15px}
+.ima-capability h2{font-size:30px;font-weight:520;margin:0 0 18px;line-height:1.4}
+.ima-capability p:not(.eyebrow){max-width:760px;margin:0;color:#afb3b6;font-size:12px;line-height:2}
+.ima-capability-meta{display:grid;grid-template-columns:1fr 1fr;border-top:1px solid #ffffff24}
+.ima-capability-meta>*{padding:11px 0;border-bottom:1px solid #ffffff18;font-size:9px;color:#8f9498;overflow-wrap:anywhere}
+.ima-capability-meta strong,.ima-capability-meta a{grid-column:1/-1;color:var(--accent);font-size:11px;font-weight:550}
+.ima-capability-meta span:nth-of-type(odd){padding-right:10px}
+.ima-capability-meta a{color:#e6e9e1;border-bottom:0;padding-top:15px}
+.integration-panel{margin:8px 0 18px;padding:22px 0;border-top:2px solid #8da665;border-bottom:1px solid var(--line)}
+.integration-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}
+.integration-heading .eyebrow{margin:0 0 8px;color:#708158;font-size:8px}
+.integration-heading h4{margin:0;font-size:17px;font-weight:600}
+.integration-panel>p{font-size:10px;line-height:1.9;color:#70767a;margin:14px 0 18px}
+.api-status{flex-shrink:0;padding:6px 9px;border:1px solid #bdc5b2;color:#60714b;background:#f3f6ef;font-size:9px}
+.api-status[data-state=verified]{border-color:#809e5d;background:#edf5e4;color:#436126}
+.api-status[data-state=missing]{border-color:#d0a29b;background:#fbf1ef;color:#8f453c}
+.check-control{display:flex;align-items:flex-start;gap:11px;padding:13px 0;margin:0;border-top:1px solid var(--line)}
+.check-control input{appearance:auto;width:17px;height:17px;margin:2px 0 0;accent-color:#688840;flex:0 0 auto}
+.check-control span{display:grid;gap:4px}
+.check-control strong{font-size:11px;color:#3d4244}
+.check-control small{font-size:9px;line-height:1.7;color:#858a8d}
+.integration-panel #connection{padding:10px 12px;background:#f5f6f3;border-left:2px solid #96a87c;margin:12px 0;font-size:9px;line-height:1.7;color:#656c68;overflow-wrap:anywhere}
+.integration-actions{display:flex;justify-content:space-between;align-items:center;gap:15px;margin:13px 0 5px}
+.integration-actions a{font-size:10px;color:#4e5d3e;text-decoration:underline;text-underline-offset:4px}
+.integration-panel details{margin-top:10px}
+.integration-panel details summary{font-size:10px;padding:12px 0}
+.integration-panel details summary span{float:right;color:#8e948b}
+.integration-panel details p{font-size:9px;line-height:1.9;color:#858a8d}
+.claim.web-only{border-color:#c59642;background:#fbf7ed}
+.claim details a{display:inline-block;margin:0 0 8px;font-size:10px;color:#52683c;text-decoration:underline;text-underline-offset:3px}
+.integration-panel{margin:14px 0 22px;padding:24px 22px;background:#f6f8f2;border:1px solid #d9dfcf;border-left:4px solid #829b5c}
+.integration-heading .eyebrow{font-size:10px;letter-spacing:1px;font-weight:650}
+.integration-heading h4{font-size:20px}
+.integration-panel>p{font-size:12px;line-height:1.9;color:#4f5652;margin:14px 0 18px}
+.integration-panel>.ima-quota{padding:12px 14px;margin:12px 0 18px;background:#fff5e5;border-left:3px solid #bf8233;color:#684b28;font-size:12px;font-weight:600;line-height:1.8}
+.ima-setup-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:0 20px;margin:18px 0 20px;border-top:1px solid #d6dccd;border-bottom:1px solid #d6dccd}
+.ima-setup-grid>div{display:flex;flex-direction:column;align-items:flex-start;gap:7px;padding:15px 0}
+.ima-setup-grid>div+div{border-left:1px solid #d6dccd;padding-left:20px}
+.ima-setup-grid strong{font-size:12px;color:#303830}
+.ima-setup-grid span,.ima-setup-grid a{font-size:10px;line-height:1.7;color:#66705f}
+.ima-setup-grid a{color:#4e633c;text-decoration:underline;text-underline-offset:3px}
+.ima-setup-grid code{font-size:9px;line-height:1.5;color:#3c4c30;overflow-wrap:anywhere}
+.integration-panel .field-row{gap:14px}
+.integration-panel label{font-size:11px}
+.integration-panel select{font-size:12px}
+.integration-panel .check-control strong{font-size:12px}
+.integration-panel .check-control small{font-size:10px}
+.integration-panel #connection{font-size:10px}
+.integration-panel details summary{font-size:11px}
+@media(max-width:760px){
+  .ima-capability{padding:42px 5%}
+  .ima-capability-inner{grid-template-columns:1fr;gap:28px}
+  .ima-capability h2{font-size:24px}
+  .integration-actions{align-items:flex-start;flex-direction:column}
+  .integration-panel{padding:20px 16px}
+  .ima-setup-grid{grid-template-columns:1fr}
+  .ima-setup-grid>div+div{border-left:0;border-top:1px solid #d6dccd;padding-left:0}
+}

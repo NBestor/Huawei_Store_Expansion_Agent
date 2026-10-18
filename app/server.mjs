@@ -63,6 +63,11 @@ export function createApp({ store, model = new DeepSeekAdapter(), ima = new ImaA
         if (req.method === 'POST' && action) {
           const input = await bodyOf(req);
           if (action === 'export' && agent.busy.has(id)) throw problem('会话正在核验，暂不可导出。', 409);
+          if (action === 'export') {
+            const file = await agent.export(id, input), ascii = `marketing-plan-V${agent.store.get(id).version}.pdf`;
+            res.writeHead(200, { 'Content-Type': 'application/pdf', 'Content-Disposition': `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(file.filename)}`, 'Content-Length': file.content.length, 'Cache-Control': 'no-store', 'X-Exported-At': file.exportedAt });
+            return res.end(file.content);
+          }
           return json(res, 200, await agent[action](id, input));
         }
       }

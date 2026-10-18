@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { contentOf, exportGate } from '../public/review.js';
+import { contentOf, exportGate, reviewClaims } from '../public/review.js';
 
 const content = { title: '产品标题', body: '有依据的产品描述', cta: '到店体验', tags: '' };
 function draft(status = 'verified') {
@@ -21,4 +21,16 @@ test('images, empty content, dirty edits and failed image loads remain blocked',
   const empty = draft(); empty.title = '';
   assert.equal(exportGate({ draft: empty, platform: 'moments' }).allowed, false);
   assert.deepEqual(contentOf(draft()), content);
+});
+test('review queue shows conflicts and web-only verified claims, but hides warnings and local or ima verified claims', () => {
+  const report = { claims: [
+    { status: 'warning', statement: '没有来源', evidence: [] },
+    { status: 'verified', statement: '文档支持', evidence: [{ kind: 'local' }] },
+    { status: 'verified', statement: 'ima支持', evidence: [{ kind: 'ima' }] },
+    { status: 'verified', statement: '只有网页支持', evidence: [{ kind: 'web' }] },
+    { status: 'verified', statement: '网页和文档都支持', evidence: [{ kind: 'web' }, { kind: 'local' }] },
+    { status: 'conflict', statement: '与资料冲突', evidence: [] },
+  ] };
+  assert.deepEqual(reviewClaims(report).map(claim => claim.statement), ['只有网页支持', '与资料冲突']);
+  assert.equal(report.claims.length, 6, 'display filtering must not mutate the persisted full report');
 });

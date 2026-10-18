@@ -1,8 +1,18 @@
-import { contentFields, exportGate } from './review.js';
+import { contentFields, exportGate, reviewClaims } from './review.js';
 import { showView, scrollBehavior } from './views.js';
 const el = id => document.getElementById(id);
 let result, loaded = [], busy = false, dirty = false, autoSaveTimer, selected, selectionVersion = 0;
 const cache = new Map();
+const integrationPanel = document.querySelector('.integration-panel');
+if (integrationPanel) {
+  const form = el('task'), introduction = integrationPanel.querySelector(':scope > p');
+  form.insertBefore(integrationPanel, form.querySelector('label'));
+  introduction.textContent = '此工作台已接入 ima 官方 OpenAPI，Agent 可查找赛事共享知识库、浏览目录、检索产品资料并读取原文和图片。';
+  const quota = document.createElement('p');
+  quota.className = 'ima-quota';
+  quota.textContent = 'ima 每日访问次数有限。日常开发与回归测试推荐使用本地赛事数据；选择 ima 才会真实访问共享库，额度用尽会明确报错，不会静默切换来源。';
+  introduction.after(quota);
+}
 const statusLabel = { verified: '已核验', warning: '待确认', conflict: '资料冲突', error: '核验失败' };
 const statusIcon = { verified: '✓', warning: '!', conflict: '×', error: '○' };
 const platformLabel = { xiaohongshu: '小红书', wechat: '公众号', moments: '门店朋友圈' };
@@ -13,7 +23,12 @@ async function request(url, options = {}) {
 }
 function post(url, value, method = 'POST') { return request(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) }); }
 function text(tag, value, className) { const node = document.createElement(tag); node.textContent = value; if (className) node.className = className; return node; }
-function showStatus(status) { el('connection').textContent = `ima：${status.ima.configured ? status.ima.message : '未配置'} · DeepSeek ${status.model.model || ''}：${status.model.configured ? status.model.message : '未配置'} · ${status.storage}`; }
+function showStatus(status) {
+  const imaText = !status.ima.configured ? '未配置' : status.ima.verified ? '已配置并验证' : `已配置 · ${status.ima.message || '尚未验证'}`;
+  el('ima-status').textContent = imaText; el('ima-status').dataset.state = status.ima.verified ? 'verified' : status.ima.configured ? 'configured' : 'missing';
+  el('ima-home-status').textContent = `ima ${imaText}`;
+  el('connection').textContent = `ima：${imaText} · DeepSeek ${status.model.model || ''}：${status.model.configured ? status.model.message : '未配置'} · ${status.storage}`;
+}
 async function showcase(id) { if (!cache.has(id)) cache.set(id, request(`/api/showcase?productId=${encodeURIComponent(id)}`)); return cache.get(id); }
 function cover(data) { return data.images.find(image => image.name.includes('高质感主视觉')) || data.images[0]; }
 async function selectProduct(id) {
@@ -58,10 +73,11 @@ async function init() {
 function taskFromForm() {
   return { productId: el('product').value, audience: el('audience').value, scene: el('scene').value, platform: el('platform').value,
     mode: el('source').value, engine: el('engine').value, revision: el('revision').value,
-    webUrls: el('web-url').value.trim() ? [el('web-url').value.trim()] : [] };
+    webUrls: el('web-url').value.trim() ? [el('web-url').value.trim()] : [], autoWeb: el('auto-web').checked };
 }
 function putTask(task) {
   for (const [id, value] of [['product', task.productId], ['audience', task.audience], ['scene', task.scene], ['platform', task.platform], ['source', task.mode], ['engine', task.engine], ['revision', task.revision || ''], ['web-url', task.webUrls?.[0] || '']]) if (el(id)) el(id).value = value;
+  el('auto-web').checked = task.autoWeb !== false;
   sourceSettings(); selectProduct(task.productId);
 }
 function currentContent() { return Object.fromEntries(contentFields.map(field => [field, el(`edit-${field}`).value])); }
@@ -78,16 +94,24 @@ function setBusy(value, message = '') {
 }
 function updateState() {
   const state = gate(); el('export').disabled = !state.allowed; el('edit-state').textContent = busy ? el('edit-state').textContent : dirty ? '有未保存修改，停止输入后将自动保存并核验。' : state.reason;
-  if (result) el('result-status').textContent = `V${result.version} · ${statusLabel[result.verification.status] || '未知'} · ${state.allowed ? '可导出' : '暂不可导出'}`;
+  if (result) {
+    const queue = reviewClaims(result.verification), reviewState = result.verification.status === 'error' ? '核验流程失败' : queue.length ? `${queue.length} 项需人工关注` : '无待人工关注项';
+    el('result-status').textContent = `V${result.version} · ${reviewState} · ${state.allowed ? '可导出 PDF' : '暂不可导出'}`;
+  }
 }
 function renderVerification(report) {
-  el('verification-summary').textContent = report.summary;
-  el('verification-counts').textContent = `${report.counts.verified} 已核验 · ${report.counts.warning} 待确认 · ${report.counts.conflict} 冲突`;
-  el('claims').replaceChildren(...report.claims.map(claim => {
-    const item = text('article', '', `claim ${claim.status}`), heading = text('button', `${statusIcon[claim.status]} ${claim.statement}`); heading.type = 'button';
+  const queue = reviewClaims(report), conflicts = queue.filter(claim => claim.status === 'conflict').length, webOnly = queue.length - conflicts;
+  el('verification-summary').textContent = report.status === 'error' ? '核验流程未完成，当前版本不可导出；请在编辑区重新核验。' : queue.length ? '以下内容需要人工判断：明确冲突，或仅由商城网页支持、尚未得到文档或 ima 支持的表述。' : '暂无需要人工关注的事实。文档或 ima 已支持、以及无明确依据的条目不在这里展示。';
+  el('verification-counts').textContent = `${conflicts} 项冲突 · ${webOnly} 项仅网页支持`;
+  el('claims').replaceChildren(...queue.map(claim => {
+    const webClaim = claim.status === 'verified', item = text('article', '', `claim ${webClaim ? 'web-only' : claim.status}`), heading = text('button', `${webClaim ? '↗' : statusIcon[claim.status]} ${claim.statement}`); heading.type = 'button';
     heading.addEventListener('click', () => { const input = el(`edit-${claim.field}`), start = input.value.indexOf(claim.statement); if (start >= 0) { input.focus({ preventScroll: true }); input.setSelectionRange(start, start + claim.statement.length); captureSelection(input); input.scrollIntoView({ behavior: scrollBehavior(), block: 'center' }); } });
     item.append(heading, text('p', claim.explanation));
-    for (const cite of claim.evidence) { const detail = document.createElement('details'); detail.append(text('summary', cite.path || cite.sourceId), text('p', `原文：${cite.quote}`)); item.append(detail); }
+    for (const cite of claim.evidence || []) {
+      const detail = document.createElement('details'), summary = text('summary', cite.path || cite.sourceId), quote = text('p', `原文：${cite.quote}`); detail.append(summary, quote);
+      if (cite.kind === 'web' && /^https:\/\/(www|item|m)\.vmall\.com\//.test(cite.path || '')) { const link = text('a', '打开华为商城原页 ↗'); link.href = cite.path; link.target = '_blank'; link.rel = 'noopener noreferrer'; detail.append(link); }
+      item.append(detail);
+    }
     return item;
   }));
 }
@@ -209,10 +233,11 @@ el('task').addEventListener('submit', async event => {
 });
 el('export').addEventListener('click', async () => {
   if (!result || !gate().allowed) return;
-  setBusy(true, '正在生成带核验依据的导出文件…');
+  setBusy(true, '正在排版文字与实际配图，生成 PDF…');
   try {
-    const record = await post(`/api/sessions/${result.sessionId}/export`, { expectedRevision: result.revision });
-    const url = URL.createObjectURL(new Blob([record.content], { type: 'text/plain;charset=utf-8' })), link = document.createElement('a'); link.href = url; link.download = record.filename; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); await refreshHistory();
+    const response = await fetch(`/api/sessions/${result.sessionId}/export`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ expectedRevision: result.revision }) });
+    if (!response.ok) { const data = await response.json().catch(() => ({})); throw Object.assign(new Error(data.error || 'PDF 生成失败'), { status: response.status }); }
+    const url = URL.createObjectURL(await response.blob()), link = document.createElement('a'); link.href = url; link.download = `营销图文方案-V${result.version}.pdf`; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); await refreshHistory();
   } catch (error) { el('edit-error').textContent = error.message; } finally { setBusy(false); }
 });
 init();
