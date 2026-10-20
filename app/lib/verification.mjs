@@ -2,19 +2,20 @@ import { failure } from './config.mjs';
 import { generate, platforms } from './workflow.mjs';
 import { contentOf, fields } from './editor.mjs';
 import { editorialReport } from './editorial.mjs';
+import { publicationIssues, angleContract, collaborationPattern } from './publication.mjs';
 
 export function sourceChunks(evidence) {
   if (evidence.documents?.length) {
     const chunks = [];
     for (const doc of evidence.documents) {
-      for (let start = 0; start < doc.text.length; start += 4000) chunks.push({ id: `S${chunks.length + 1}`, path: doc.path, kind: doc.kind, productId: doc.productId, text: doc.text.slice(start, start + 4000) });
+      for (let start = 0; start < doc.text.length; start += 4000) chunks.push({ id: `S${chunks.length + 1}`, path: doc.path, kind: doc.kind, productId: doc.productId, ecosystemCategory: doc.ecosystemCategory, ecosystemCategoryLabel: doc.ecosystemCategoryLabel, title: doc.title, text: doc.text.slice(start, start + 4000) });
     }
     return chunks;
   }
   const text = evidence.facts || '';
   return Array.from({ length: Math.ceil(text.length / 4000) }, (_, i) => ({ id: `S${i + 1}`, path: evidence.factPath, kind: evidence.sourceMode || 'local', text: text.slice(i * 4000, (i + 1) * 4000) }));
 }
-export function normalizeVerification(value, draft, chunks, engine) {
+export function normalizeVerification(value, draft, chunks, engine, ecosystem) {
   if (!value || !Array.isArray(value.claims) || value.claims.length > 100 || typeof value.summary !== 'string') throw failure('事实核验响应格式无效，请重新核验。');
   const claims = value.claims.map((claim, index) => {
     if (!claim || !fields.includes(claim.field) || typeof claim.statement !== 'string' || !claim.statement.trim() || !draft[claim.field].includes(claim.statement) || !['verified', 'warning', 'conflict'].includes(claim.status) || typeof claim.explanation !== 'string' || !Array.isArray(claim.evidence)) throw failure('事实核验中的表述或状态无效，请重新核验。');
@@ -22,10 +23,11 @@ export function normalizeVerification(value, draft, chunks, engine) {
       const chunk = chunks.find(item => item.id === cite?.sourceId);
       return chunk && typeof cite.quote === 'string' && cite.quote.trim().length >= 6 && chunk.text.includes(cite.quote) ? [{ sourceId: chunk.id, path: chunk.path || '', kind: chunk.kind || 'local', quote: cite.quote }] : [];
     });
-    const missing = claim.status !== 'warning' && evidence.length === 0;
+    const wrongEcosystem = ecosystem !== undefined && claim.status === 'verified' && collaborationPattern.test(claim.statement) && (!ecosystem?.card || !ecosystem.card.sentence.includes(claim.statement) || !ecosystem.card.evidence.every(approved => evidence.some(cite => cite.path === approved.path && cite.quote.includes(approved.quote)))) ;
+    const missing = claim.status !== 'warning' && evidence.length === 0 || wrongEcosystem;
     return { id: `C${index + 1}`, field: claim.field, statement: claim.statement,
       status: missing ? 'warning' : claim.status, evidence,
-      explanation: missing ? '核验未提供可逐字溯源的证据，降级为待确认；不视为已证实的错误。' : claim.explanation };
+      explanation: wrongEcosystem ? '协同表述没有引用通过当前PC配对核验的官网证据，不能视为已证实。' : missing ? '核验未提供可逐字溯源的证据，降级为待确认；不视为已证实的错误。' : claim.explanation };
   });
   if (!claims.length) claims.push({ id: 'C1', field: 'body', statement: draft.body.slice(0, 160), status: 'warning', explanation: '核验没有返回可评估的产品主张，请自行核对。', evidence: [] });
   const counts = { verified: 0, warning: 0, conflict: 0 }; claims.forEach(claim => counts[claim.status]++);
@@ -58,6 +60,15 @@ export function finalize(task, source, draft, verification, points = [], revisio
   ];
   result.exportable = result.audit.approved && result.checks[2].status === 'pass';
   if (task.engine === 'model') {
+    result.ecosystem = draft.ecosystem || { status: 'unavailable', card: null, reason: '未建立当前电脑的官网配对证据。' };
+    result.angleContract = angleContract(task);
+    result.angleReview = draft.angleReview;
+    const issues = publicationIssues(task, draft, result.ecosystem);
+    if (draft.angleReview && (draft.angleReview.approved !== true || fields.some(field => draft.angleReview.content?.[field] !== draft[field]))) issues.push(draft.angleReview.reason || '当前版本尚未通过销售角度复核。');
+    result.publication = { status: issues.length ? 'pending' : 'pass', issues };
+    result.checks.push({ name: '销售角度与协同证据', status: issues.length ? 'pending' : 'pass', detail: issues.join('；') || '所选角度已体现，协同内容未超出批准证据。' });
+    if (task.ecosystemDevices?.length) result.checks.push({ name: '生态配对资料', status: result.ecosystem.status === 'supported' ? 'pass' : 'pending', detail: result.ecosystem.reason });
+    if (issues.length) { result.audit.suggestions.push(...issues); result.audit.issues.push(...issues); result.exportable = false; }
     result.editorial = editorialReport(task.platform, draft);
     result.checks.push({ name: '平台篇幅', status: result.editorial.status === 'within-target' ? 'pass' : 'pending', detail: result.editorial.summary });
     result.strategy.note += ` ${result.editorial.summary}${result.editorial.status === 'within-target' ? '' : '，未达建议范围，可继续精修；不以凑字数替代事实准确'}。`;

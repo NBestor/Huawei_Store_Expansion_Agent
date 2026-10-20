@@ -238,41 +238,95 @@ async function fetchConsumerPage(value, transport = fetch) {
   for await (const part of response.body) { size += part.length; if (size > 1e6) throw failure('华为官网页面超过读取大小上限。'); parts.push(part); }
   const html = Buffer.concat(parts).toString('utf8');
   const title = decodeHtml((html.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i)?.[1] || '').replace(/<[^>]*>/g, ' ')).replace(/\s+/g, ' ').trim();
-  const text = decodeHtml(html.replace(/<(script|style|noscript)\b[^>]*>[\s\S]*?<\/\1>/gi, ' ').replace(/<!--[\s\S]*?-->/g, ' ').replace(/<[^>]*>/g, '\n')).replace(/[ \t]+/g, ' ').replace(/\n\s*\n/g, '\n').trim().slice(0, 30000);
+  const text = decodeHtml(html.replace(/<(script|style|noscript|nav|header|footer)\b[^>]*>[\s\S]*?<\/\1>/gi, ' ').replace(/<!--[\s\S]*?-->/g, ' ').replace(/<[^>]*>/g, '\n')).replace(/[ \t]+/g, ' ').replace(/\n\s*\n/g, '\n').trim().slice(0, 60000);
   if (text.length < 80) throw failure('页面没有足够的可读文字，不能作为依据。');
   const links = [...html.matchAll(/href=["']([^"']+)["']/gi)].map(match => match[1]);
-  return { path: url, title, text, links, kind: 'web', fetchedAt: new Date().toISOString() };
+  const supportLinks = [...html.matchAll(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi)].flatMap(match => {
+    const label = decodeHtml(match[2].replace(/<[^>]*>/g, ' '));
+    if (!/协同|碰一碰|互联|支持机型|兼容|设备要求|传送/.test(label)) return [];
+    try { const link = huaweiConsumerUrl(new URL(decodeHtml(match[1]), url).href); return /\/support\/(?:content|how-to)\//.test(new URL(link).pathname) ? [link] : []; } catch { return []; }
+  });
+  return { path: url, title, text, links, supportLinks, kind: 'web', fetchedAt: new Date().toISOString() };
 }
 
 export class EcosystemTools {
-  constructor(devices = [], transport = fetch) { this.devices = [...new Set(devices)].filter(device => ecosystemDirectories[device]); this.transport = transport; this.resultPromise = null; }
+  constructor(devices = [], transport = fetch, product) { this.devices = [...new Set(devices)].filter(device => ecosystemDirectories[device]); this.transport = transport; this.product = product; this.resultPromise = null; }
   async discover() {
     return this.resultPromise ||= this.load();
   }
   async load() {
     const documents = [], trace = [];
+    if (this.devices.length && this.product) {
+      for (const url of (await officialProductPages(this.product)).filter(url => new URL(url).hostname === consumerHost).slice(0, 1)) {
+        try {
+          const page = await fetchConsumerPage(url, this.transport);
+          documents.push({ ...page, kind: 'ecosystem-web', ecosystemCategory: 'pc', productId: this.product.id });
+          for (const support of [...new Set(page.supportLinks)].slice(0, 3)) {
+            try { documents.push({ ...await fetchConsumerPage(support, this.transport), kind: 'ecosystem-web', ecosystemCategory: 'pc', productId: this.product.id }); }
+            catch (error) { trace.push({ action: 'ecosystem_pc_support', target: support, result: safeErrorMessage(error) }); }
+          }
+        } catch (error) { trace.push({ action: 'ecosystem_pc', target: url, result: safeErrorMessage(error) }); }
+      }
+    }
     for (const device of this.devices) {
       const directory = ecosystemDirectories[device], url = `https://${consumerHost}${directory.path}`;
       try {
         const listing = await fetchConsumerPage(url, this.transport);
         const candidates = [...new Set(listing.links.map(href => { try { return huaweiConsumerUrl(new URL(decodeHtml(href), url).href); } catch { return ''; } }).filter(link => {
           try { const path = new URL(link).pathname; return path.startsWith(directory.path) && path !== directory.path && !/\/(support|accessories|compare|where-to-buy)\//i.test(path); } catch { return false; }
-        }))].slice(0, 8);
+        }))].slice(0, 12);
         let found = 0;
         for (const candidate of candidates) {
-          if (found >= 2) break;
+          if (found >= 4) break;
           try {
             const page = await fetchConsumerPage(candidate, this.transport);
             if (!page.title || /华为消费者业务|HUAWEI Consumer/i.test(page.title) && page.text.length < 300) continue;
             page.ecosystemCategory = device; page.ecosystemCategoryLabel = directory.label; page.kind = 'ecosystem-web';
             documents.push(page); found++;
+            const support = [...new Set([...page.supportLinks, ...page.links.map(href => { try { return huaweiConsumerUrl(new URL(decodeHtml(href), candidate).href); } catch { return ''; } }).filter(link => link && link !== candidate && (/\/support\/(?:content|how-to)\//.test(new URL(link).pathname) || link.startsWith(candidate.replace(/\/$/, '') + '/specs/')))])].slice(0, 2);
+            for (const url of support) {
+              if (documents.some(doc => doc.path === url)) continue;
+              try { documents.push({ ...await fetchConsumerPage(url, this.transport), kind: 'ecosystem-web', ecosystemCategory: device, ecosystemCategoryLabel: directory.label }); }
+              catch (error) { trace.push({ action: 'ecosystem_support', target: url, result: safeErrorMessage(error) }); }
+            }
           } catch (error) { trace.push({ action: 'ecosystem_read', target: candidate, result: safeErrorMessage(error), at: new Date().toISOString() }); }
         }
-        trace.push({ action: 'ecosystem_discover', target: url, result: `官方目录读取完成，取得 ${found} 个候选型号页面`, at: new Date().toISOString() });
+        trace.push({ action: 'ecosystem_discover', target: url, result: `官方目录读取完成，取得 ${found} 个候选型号页面供配对核验`, at: new Date().toISOString() });
       } catch (error) { trace.push({ action: 'ecosystem_discover', target: url, result: safeErrorMessage(error), at: new Date().toISOString() }); }
+    }
+    if (this.product && this.devices.length) {
+      const queries = this.devices.slice(0, 2).map(device => `${this.product.name} ${ecosystemDirectories[device].label} 多屏协同 碰一碰 支持机型 系统要求`);
+      for (const question of queries) {
+        try {
+          const urls = await discoverOfficialSupport(question, this.transport);
+          trace.push({ action: 'ecosystem_pairing_question', question, result: `发现 ${urls.length} 条官网支持链接；搜索摘要不作为证据`, at: new Date().toISOString() });
+          for (const url of urls) {
+            if (documents.some(doc => doc.path === url)) continue;
+            try {
+              const page = await fetchConsumerPage(url, this.transport);
+              documents.push({ ...page, kind: 'ecosystem-web', ecosystemCategory: 'pc' });
+            } catch (error) { trace.push({ action: 'ecosystem_pairing_support', target: url, result: safeErrorMessage(error) }); }
+          }
+        } catch (error) { trace.push({ action: 'ecosystem_pairing_search', question, result: safeErrorMessage(error) }); }
+      }
     }
     return { documents, trace };
   }
+}
+
+// Search only discovers URLs. Only the allowlisted official page body can become evidence.
+export async function discoverOfficialSupport(question, transport = fetch) {
+  const url = new URL('https://www.bing.com/search');
+  url.search = new URLSearchParams({ q: `site:consumer.huawei.com/cn/support/ ${question}`, format: 'rss' });
+  const response = await transport(url.href, { redirect: 'error', signal: AbortSignal.timeout(12000), headers: { Accept: 'application/rss+xml, application/xml, text/xml' } });
+  if (!response.ok || !/(?:xml|rss)/i.test(response.headers.get('content-type') || '')) throw failure('官网支持页搜索暂不可用，继续使用已读取的官方资料。');
+  let size = 0; const parts = [];
+  for await (const part of response.body) { size += part.length; if (size > 500000) throw failure('官网支持搜索响应超过上限。'); parts.push(part); }
+  const xml = Buffer.concat(parts).toString('utf8');
+  return [...new Set([...xml.matchAll(/<item\b[^>]*>([\s\S]*?)<\/item>/gi)].flatMap(item => {
+    const raw = item[1].match(/<link\b[^>]*>([\s\S]*?)<\/link>/i)?.[1]?.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1').trim();
+    try { const href = huaweiConsumerUrl(decodeHtml(raw || '')); return /\/cn\/support\/(?:content|how-to)\//.test(new URL(href).pathname) ? [href] : []; } catch { return []; }
+  }))].slice(0, 3);
 }
 
 function safeErrorMessage(error) { return error?.publicMessage || '官方页面暂不可读取'; }

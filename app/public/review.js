@@ -11,6 +11,7 @@ export function exportGate({ draft, platform, loaded, dirty = false, busy = fals
   if (!draft) return { allowed: false, reason: '请先生成或打开历史草稿。' };
   if (dirty || busy) return { allowed: false, reason: '修改正在保存或核验，完成后可导出。' };
   if (!draft.title?.trim() || !draft.body?.trim()) return { allowed: false, reason: '标题和正文不能为空。' };
+  if (draft.publication?.status === 'pending') return { allowed: false, reason: '销售角度或协同证据未通过检查，请修改并重新核验。' };
   const [min, max] = limits[platform] || [1, 6];
   if (!Array.isArray(draft.images) || draft.images.length < min || draft.images.length > max) return { allowed: false, reason: `当前平台需要 ${min}–${max} 张图片，现有 ${draft.images?.length || 0} 张。` };
   if (loaded && (loaded.length !== draft.images.length || loaded.some(state => state !== 'loaded'))) return { allowed: false, reason: loaded.includes('failed') ? '有配图加载失败，请检查素材。' : '正在检查配图是否可用。' };

@@ -13,6 +13,7 @@ test('warnings allow export but conflicts, errors and stale verification do not'
   assert.equal(exportGate({ draft: draft('error'), platform: 'moments' }).allowed, false);
   const changed = draft(); changed.body = '修改后但未重核';
   assert.equal(exportGate({ draft: changed, platform: 'moments' }).allowed, false);
+  assert.equal(exportGate({ draft: { ...draft(), publication: { status: 'pending' } }, platform: 'moments' }).allowed, false);
 });
 test('images, empty content, dirty edits and failed image loads remain blocked', () => {
   assert.equal(exportGate({ draft: draft(), platform: 'xiaohongshu' }).allowed, false);

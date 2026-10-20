@@ -9,6 +9,7 @@ export const voiceProfiles = {
   professional: { label: '简洁专业', guidance: '以专业销售口吻直接介绍本款电脑的具体亮点和应用价值，参数准确，必要条件就近简短保留。CTA示例：欢迎咨询在售配置与购买信息，预约到店体验这款华为电脑。', cta: '欢迎咨询在售配置与购买信息，预约到店体验这款华为电脑。' },
 };
 export const salesIdentity = '你为华为门店销售或品牌运营工作人员代拟可直接面向顾客发布的产品宣传成稿。作者站在销售方，读者是潜在顾客；目的为推荐当前这款华为电脑、激发了解和购买兴趣、引导咨询或到店体验。不要把读者当营销员工进行培训。不要写选购指南、攻略、政策教程、核对清单或测评报告；不假装自购用户，不虚构门店活动、优惠、库存、服务承诺或实测经历。电脑是主角，客观事实仍须有依据。';
+export const salesAngleGuidance = '标签、场景和热点决定本篇推介电脑的销售切入角度：把顾客当下的期待或购买动机接到本款电脑有依据的亮点，再落到心动理由和沟通邀请。所选角度应贯穿开场、卖点组织和收束，不降格为文末附加提醒；不把主题本身写成科普、攻略或需求盘点。国补、以旧换新、降价与大促只有被任务明确选中时才使用：借换新时机吸引顾客了解本机，产品推荐仍是主体。有当前官方原文明示覆盖本机、地区、时间、渠道与资格条件的优惠依据，才能把购机实惠写成购买理由，并就近简短保留适用条件；没有适用依据时，只借换新话题推荐电脑、邀请咨询当前购买信息，不能暗示本机可享补贴、降价或更便宜，不能编造到手价和节省金额。是否适用及证据检索由系统处理，不让顾客自行核对当地政策、查官网、列需求或检查软件。标签备注与guardrails是内部策划及事实边界，不逐字放进顾客成稿；必要事实条件以自然简短的销售语言表达。';
 export function marketingCopyIssues(draft) {
   const issues = [], title = draft.title || '', body = draft.body || '', cta = draft.cta || '';
   if (/攻略|指南|避坑|怎么选|如何选|选购步骤|先.*(?:核对|查清)/.test(title)) issues.push('标题仍是选购或核对指南，应直接突出当前电脑和推荐亮点。');
@@ -16,7 +17,31 @@ export function marketingCopyIssues(draft) {
   if (/自然提示|电脑(?:是|为|作为)(?:唯一)?主角|文案结构|创作角度|不能作为事实|来源同时明确覆盖|当前地区、时间、电脑品类|先写电脑|再把政策|仅表示用户需求/.test(body)) issues.push('内部写作指令泄漏到顾客文案，应改写成自然销售表达。');
   if (/SKU|P1(?:事实|资料)|本草稿|结构化核验/.test(body + cta)) issues.push('正文出现内部型号或核验术语，应使用顾客可理解的表达。');
   if (/(?:先|请|建议).{0,35}(?:核对|查).{0,35}(?:再(?:做|作|决定)|细则)/.test(cta)) issues.push('结尾把任务交还顾客，应改为友善邀请咨询或到店体验。');
+  if (/(?:请|建议|记得|自行|自己|先)[^。！\n]{0,20}(?:核对|查阅|查询|查看)[^。！\n]{0,20}(?:当地政策|当地活动|政策细则|官网资料)/.test(body + '\n' + cta)) issues.push('文案把查政策或找资料的任务交给顾客，应以电脑亮点吸引购买兴趣，并邀请向销售人员咨询。');
   return issues;
+}
+
+const angleAnchors = {
+  'time-national-subsidy': [['国补', '国家补贴', '以旧换新']],
+  'hot-subsidy': [['国补', '国家补贴', '以旧换新']],
+  'time-back-to-school': [['开学', '新学期', '校园']],
+  'time-spring-semester': [['开学', '新学期', '校园']],
+  'hot-school-start': [['开学', '新学期', '校园']],
+  'computer-campus': [['校园', '大学', '新生', '课程']],
+  'computer-travel-work': [['出差', '差旅', '旅途', '路上']],
+};
+
+export function selectedAngleIssues(task, draft) {
+  const tag = task.tag || (task.topic ? { id: 'topic', label: task.topic.tag || task.topic.title, aliases: [task.topic.title], needs: [] } : null);
+  if (!tag) return [];
+  const body = `${draft.title || ''}\n${draft.body || ''}`;
+  const anchors = angleAnchors[tag.id] || [[tag.label, ...(tag.aliases || []), ...(tag.needs || [])].filter(term => typeof term === 'string' && term.length >= 2)];
+  if (!anchors[0]?.length) return [];
+  const missing = anchors.filter(group => !group.some(term => body.includes(term))).map(group => group.join('/'));
+  if (missing.length) return [`所选「${tag.label}」切入角度没有在标题或正文中体现（应自然带出：${missing.join('、')}），请重写并让话题贯穿电脑推荐。`];
+  const opening = String(draft.body || '').trim().split(/\n/)[0].slice(0, 180);
+  if (!task.topic && /国补/.test(tag.label) && /最近.{0,12}(?:热|讨论|话题)|国补.{0,8}(?:正热|热度|近期)/.test(opening)) return ['标签不能证明时效：无热点来源不能断言国补近期热议。改用“因为国补话题动了换电脑的心思？”等条件式顾客动机。'];
+  return anchors.some(group => !group.some(term => opening.includes(term))) ? [`所选「${tag.label}」只在标题或后文出现，开场仍是泛电脑推荐。首段应从该话题或人群具体场景引出本机，再用电脑亮点承接；不能只补标签或结尾提醒。`] : [];
 }
 export function generate(task, evidence) {
   const platform = platforms[task.platform];
@@ -26,7 +51,8 @@ export function generate(task, evidence) {
   const voice = voiceProfiles[task.voice] || voiceProfiles.friendly;
   const strategy = { audience, scene, tag: task.tag ? { id: task.tag.id, type: task.tag.type, label: task.tag.label } : null, platform: platform.name, voice: voice.label, angle: `面向${audience}，以「${scene}」带出当前电脑的推荐理由`, tone: platform.tone, goal: '推荐当前电脑，激发兴趣并引导咨询、到店体验', note: '标签只提供创作角度，不代表产品事实；尚未接入模型进行需求推理。' };
   const title = `${product.name}｜让下一段日常，充满期待`;
-  const intro = `${product.name}，期待成为${audience}的新电脑搭子。围绕「${scene}」，一起开启新的学习与工作日常。`;
+  const focus = task.tag?.label || task.topic?.tag || scene;
+  const intro = `${product.name}，期待成为${audience}的新电脑搭子。「${focus}」，给下一段学习与工作日常添一份新期待。`;
   const body = platform === platforms.moments
     ? `${intro}\n\n新电脑，新期待。欢迎来店里近距离感受这款华为电脑，聊聊你喜欢的配置！`
     : `${intro}\n\n给新日常，一份新期待\n从一堂新课到一个新项目，每次打开电脑，都有值得投入的事。今天为你推荐的，就是这款 ${product.name}。\n\n心动，就来亲手体验\n欢迎来店里看看它的外观，体验日常操作，也可以私信咨询在售配置与购买信息。让我们一起，把心仪的电脑带进你的生活。`;

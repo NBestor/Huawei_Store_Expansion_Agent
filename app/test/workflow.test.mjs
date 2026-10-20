@@ -23,7 +23,7 @@ test('preset tag library has distinct typed records and valid category reference
   assert.ok(library.timingTags.some(item => item.id === 'time-national-subsidy'));
   const subsidy = library.timingTags.find(item => item.id === 'time-national-subsidy');
   assert.deepEqual(subsidy.categories, ['computer']);
-  assert.match(subsidy.angle, /换新门槛/); assert.match(subsidy.guardrails.join(' '), /不得承诺可享/);
+  assert.match(subsidy.angle, /推荐本款电脑/); assert.match(subsidy.guardrails.join(' '), /不得承诺可享/);
   assert.deepEqual(library.hotTags.find(item => item.id === 'hot-subsidy').categories, ['computer']);
   assert.ok(library.hotTags.some(item => item.id === 'hot-price-cut'));
   assert.ok(library.needMappings.travel.categories.includes('phone'));
@@ -108,6 +108,15 @@ test('HTTP validates incomplete tasks, serves topic search and blocks ima rule f
     assert.equal(tags.categories.length, 10); assert.ok(tags.hotTags.some(tag => tag.id === 'hot-subsidy'));
     const recommendations = await (await fetch(`${base}/api/tags/recommend?audience=${encodeURIComponent('大学新生')}&month=9`)).json();
     assert.equal(recommendations.scenes[0].id, 'computer-campus'); assert.ok(recommendations.timing.every(tag => tag.effective.months.includes(9)));
+    const subsidy = tags.timingTags.find(tag => tag.id === 'time-national-subsidy');
+    const angleResponse = await post({ productId: list[0].id, tagId: subsidy.id, audience: '大学新生', platform: 'moments', autoOfficialImages: false });
+    const angled = await angleResponse.json(); assert.equal(angleResponse.status, 200);
+    assert.equal(angled.task.tag.angle, subsidy.angle); assert.equal(angled.task.scene, subsidy.angle);
+    assert.ok(!angled.body.includes(subsidy.angle), 'internal angle instructions must not be copied into rule-draft body');
+    store.delete(angled.sessionId);
+    const activeTags = [...tags.categoryTags, ...tags.timingTags, ...tags.hotTags, ...tags.crossTags].filter(tag => tag.categories.includes('computer'));
+    assert.equal(activeTags.length, 48);
+    assert.ok(activeTags.every(tag => /电脑/.test(tag.angle)));
     assert.equal((await fetch(`${base}/api/tags/recommend?month=13`)).status, 400);
     assert.equal((await fetch(`${base}/api/tags/recommend?month=0`)).status, 400);
     assert.equal((await post({ productId: list[0].id, audience: '大学新生', categoryId: 'phone', platform: 'moments' })).status, 409);

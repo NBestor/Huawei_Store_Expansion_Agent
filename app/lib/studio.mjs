@@ -8,6 +8,7 @@ import { problem, present } from './store.mjs';
 import { fields, contentOf, selection, mergeManual, mergeReplacement, addLock } from './editor.mjs';
 import { finalize, offlineVerification, failedVerification } from './verification.mjs';
 import { safeError } from './config.mjs';
+import { publicationIssues } from './publication.mjs';
 import { exportGate } from '../public/review.js';
 import { renderPlanPdf } from './pdf.mjs';
 import { findPresetTag } from './tags.mjs';
@@ -49,14 +50,14 @@ export class Studio {
       tag: typeof value.topic.tag === 'string' ? value.topic.tag.slice(0, 16) : '',
       angle: typeof value.topic.angle === 'string' ? value.topic.angle.slice(0, 120) : '',
     } : null;
-    const scene = (value.scene || '').trim() || (selectedTag ? selectedTag.angle : topic ? `结合近期话题“${topic.title}”，面向${value.audience.trim()}介绍产品` : `面向${value.audience.trim()}的日常电脑使用与选购`);
+    const scene = (value.scene || '').trim() || (selectedTag ? selectedTag.angle : topic ? `借话题“${topic.title}”的关注度，面向${value.audience.trim()}推荐本款华为电脑，突出有依据的亮点与入手理由` : `面向${value.audience.trim()}推荐本款华为电脑，以日常期待带出真实亮点与换新吸引力`);
     return { product, task: { productId: product.id, officialImageIds, autoOfficialImages: value.autoOfficialImages !== false, categoryId, audience: value.audience.trim(), scene, tag: selectedTag, topic, ecosystemDevices: [...new Set(value.ecosystemDevices || [])], platform: value.platform, voice: value.voice || 'friendly', mode: value.mode || 'local', engine: value.engine || 'rules', revision: value.revision || '', webUrls, autoWeb: value.autoWeb !== false } };
   }
   async create(value) {
     const { product, task } = await this.validateTask(value);
     return this.exclusive('generation', async () => {
       const local = await evidence(product.id), tools = new FactTools(product, task.webUrls), assets = [];
-      tools.ecosystem = new EcosystemTools(task.ecosystemDevices);
+      tools.ecosystem = new EcosystemTools(task.ecosystemDevices, fetch, product);
       let official = [], imageReason = '已关闭官网自动配图';
       const hadCached = this.store.officialImages(product.id).length > 0;
       if (task.officialImageIds.length) {
@@ -97,8 +98,10 @@ export class Studio {
     if (task.engine !== 'model' && !force) return { source, verification: offlineVerification(draft) };
     try {
       const tools = new FactTools(source.product, task.webUrls);
-      tools.ecosystem = new EcosystemTools(task.ecosystemDevices);
-      return await this.model.inspect(task, source, draft, tools);
+      tools.ecosystem = new EcosystemTools(task.ecosystemDevices, fetch, source.product);
+      const checked = await this.model.inspect(task, source, draft, tools);
+      if ((task.tag || task.topic) && this.model.reviewAngle) checked.angleReview = { ...await this.model.reviewAngle(task, draft), content: contentOf(draft) };
+      return checked;
     }
     catch (error) { return { source, verification: failedVerification(draft, safeError(error)) }; }
   }
@@ -116,7 +119,12 @@ export class Studio {
       } else if (input.action === 'manual') merged = mergeManual(draft, locks, input.content);
       else throw problem('不支持的编辑操作。');
       if (fields.every(field => draft[field] === merged.content[field])) return present(session);
-      const next = { ...draft, ...merged.content }, checked = await this.check(session.task, source, next, input.action === 'ai');
+      const next = { ...draft, ...merged.content };
+      const publicationProblems = publicationIssues(session.task, next, draft.ecosystem);
+      if (input.action === 'ai' && publicationProblems.length) throw problem(`局部改写未保留销售角度或协同依据，原稿未改动：${publicationProblems.join('；')}`);
+      const checked = await this.check(session.task, source, next, input.action === 'ai');
+      next.angleReview = checked.angleReview;
+      if (input.action === 'ai' && checked.angleReview?.approved === false) throw problem(`局部改写未保留销售切入，原稿未改动：${checked.angleReview.reason}`);
       const saved = finalize(session.task, checked.source, next, checked.verification, points);
       return present(this.store.append(id, session.revision, { source: checked.source, draft: saved, points, locks: merged.locks }, input.action === 'ai' ? `AI局部修改：${input.instruction.slice(0, 60)}` : '手动编辑并自动核验'));
     });
@@ -125,7 +133,7 @@ export class Studio {
     return this.exclusive(id, async () => {
       const session = this.store.assertCurrent(id, input.expectedRevision), snapshot = session.snapshot;
       const checked = await this.check(session.task, snapshot.source, snapshot.draft, true);
-      const draft = finalize(session.task, checked.source, snapshot.draft, checked.verification, snapshot.points);
+      const draft = finalize(session.task, checked.source, { ...snapshot.draft, angleReview: checked.angleReview }, checked.verification, snapshot.points);
       return present(this.store.append(id, session.revision, { ...snapshot, source: checked.source, draft }, 'AI重新核验'));
     });
   }
