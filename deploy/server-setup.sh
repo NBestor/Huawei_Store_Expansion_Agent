@@ -6,9 +6,9 @@ set -e
 APP_DIR=/root/huawei-pc-agent
 
 echo "==> 1/3 检查 Node.js"
-if ! command -v node >/dev/null 2>&1; then
-  echo "    未检测到 Node，正在安装 Node.js 20..."
-  curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+if ! command -v node >/dev/null 2>&1 || [ "$(node -p 'Number(process.versions.node.split(".")[0])')" -lt 24 ]; then
+  echo "    需要 Node.js 24+，正在安装 Node.js 24..."
+  curl -fsSL https://deb.nodesource.com/setup_24.x | bash -
   apt-get install -y nodejs
 fi
 node --version
@@ -27,6 +27,7 @@ fi
 
 echo "==> 启动服务"
 cd "$APP_DIR"
+npm install --omit=dev
 nohup node app/server.mjs > app.log 2>&1 &
 echo "    已启动，日志：$APP_DIR/app.log"
-echo "    访问：http://$(hostname -I | awk '{print $1}'):3000"
+echo "    应用只监听 127.0.0.1:3000；公网访问请合并 deploy/nginx.conf.example 并设置 PUBLIC_ORIGIN。"

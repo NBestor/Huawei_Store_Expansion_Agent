@@ -12,6 +12,7 @@ import { Studio } from './lib/studio.mjs';
 import { cacheOfficialProductImages, factIndex, distinctOfficialImages } from './lib/knowledge.mjs';
 import { searchTopics } from './lib/topics.mjs';
 import { getTagLibrary, recommendPresetTags } from './lib/tags.mjs';
+import { Jobs } from './lib/jobs.mjs';
 const publicRoot = fileURLToPath(new URL('./public/', import.meta.url));
 const types = { '.html': 'text/html; charset=utf-8', '.css': 'text/css', '.js': 'text/javascript', '.jpg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp' };
 const json = (res, status, value) => { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(value)); };
@@ -22,8 +23,9 @@ async function bodyOf(req) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw problem('请求格式错误。');
   return value;
 }
-export function createApp({ store, model = new DeepSeekAdapter(), ima = new ImaAdapter(), topicSearch = searchTopics, imageTransport = fetch } = {}) {
+export function createApp({ store, model = new DeepSeekAdapter(), ima = new ImaAdapter(), topicSearch = searchTopics, imageTransport = fetch, publicOrigin = process.env.PUBLIC_ORIGIN || '' } = {}) {
   let studio, verifying = false;
+  const jobs = new Jobs();
   const service = () => studio ||= new Studio(store ||= new HistoryStore(), model, ima, imageTransport);
   const app = http.createServer(async (req, res) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -31,7 +33,16 @@ export function createApp({ store, model = new DeepSeekAdapter(), ima = new ImaA
     try {
       const url = new URL(req.url, 'http://localhost');
       if (!/^(127\.0\.0\.1|localhost)(:\d+)?$/.test(req.headers.host || '')) throw problem('仅允许本机访问。', 403);
-      if (!['GET', 'HEAD'].includes(req.method) && req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) throw problem('不允许跨站请求。', 403);
+      if (!['GET', 'HEAD'].includes(req.method) && req.headers.origin && req.headers.origin !== `http://${req.headers.host}` && req.headers.origin !== publicOrigin) throw problem('不允许跨站请求。', 403);
+      const execute = (key, input, work) => {
+        if (req.headers.prefer !== 'respond-async') return work().then(value => json(res, 200, value));
+        const job = jobs.submit(req.headers['x-request-id'], key, input, work);
+        res.setHeader('Preference-Applied', 'respond-async');
+        res.setHeader('Location', `/api/jobs/${job.jobId}`);
+        return json(res, 202, job);
+      };
+      const jobRoute = url.pathname.match(/^\/api\/jobs\/([\da-f-]{36})$/i);
+      if (req.method === 'GET' && jobRoute) return json(res, 200, jobs.get(jobRoute[1]));
       if (req.method === 'GET' && url.pathname === '/api/status') return json(res, 200, { ima: await ima.status(), model: model.status(), mode: 'local', version: '0.3.0', storage: 'SQLite', platforms });
       if (req.method === 'GET' && url.pathname === '/api/products') return json(res, 200, await products());
       if (req.method === 'GET' && url.pathname === '/api/tags') return json(res, 200, getTagLibrary());
@@ -65,13 +76,16 @@ export function createApp({ store, model = new DeepSeekAdapter(), ima = new ImaA
         try { const [imaStatus, modelStatus] = await Promise.all([ima.verify(), model.verify()]); return json(res, 200, { ima: imaStatus, model: modelStatus, version: '0.3.0', storage: 'SQLite' }); }
         finally { verifying = false; }
       }
-      if (req.method === 'POST' && url.pathname === '/api/generate') return json(res, 200, await service().create(await bodyOf(req)));
+      if (req.method === 'POST' && url.pathname === '/api/generate') {
+        const input = await bodyOf(req);
+        return await execute('generation', input, () => service().create(input));
+      }
       if (url.pathname === '/api/history') {
         if (req.method === 'GET') return json(res, 200, service().store.list());
         if (req.method === 'DELETE') {
           const input = await bodyOf(req);
           if (input.confirm !== 'DELETE_ALL_HISTORY') throw problem('清空历史需要明确确认。');
-          if (service().busy.size) throw problem('有任务正在执行，请完成后再清空历史。', 409);
+          if (service().busy.size || jobs.running) throw problem('有任务正在执行，请完成后再清空历史。', 409);
           service().store.clear(); return json(res, 200, { deleted: true });
         }
       }
@@ -91,6 +105,7 @@ export function createApp({ store, model = new DeepSeekAdapter(), ima = new ImaA
             res.writeHead(200, { 'Content-Type': 'application/pdf', 'Content-Disposition': `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(file.filename)}`, 'Content-Length': file.content.length, 'Cache-Control': 'no-store', 'X-Exported-At': file.exportedAt });
             return res.end(file.content);
           }
+          if (action === 'edit' || action === 'recheck') return await execute(`session:${id}`, input, () => agent[action](id, input));
           return json(res, 200, await agent[action](id, input));
         }
       }

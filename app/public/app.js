@@ -1,5 +1,6 @@
 import { contentFields, exportGate, reviewClaims } from './review.js';
 import { showView, scrollBehavior } from './views.js';
+import { request, responseError, waitForJob } from './http.js';
 const el = id => document.getElementById(id);
 let result, loaded = [], busy = false, dirty = false, autoSaveTimer, selected, selectionVersion = 0;
 const cache = new Map();
@@ -66,12 +67,56 @@ if (integrationPanel) {
 const statusLabel = { verified: '已核验', warning: '待确认', conflict: '资料冲突', error: '核验失败' };
 const statusIcon = { verified: '✓', warning: '!', conflict: '×', error: '○' };
 const platformLabel = { xiaohongshu: '小红书', wechat: '公众号', moments: '门店朋友圈' };
-async function request(url, options = {}) {
-  const res = await fetch(url, options), type = res.headers.get('content-type') || '';
-  const data = type.includes('json') ? await res.json() : await res.text();
-  if (!res.ok) throw Object.assign(new Error(data.error || data || '请求失败'), { status: res.status }); return data;
+const pendingKey = 'pc-studio-pending-job';
+let pendingJob;
+try { const saved = JSON.parse(sessionStorage.getItem(pendingKey)); if (saved && /^[\da-f-]{36}$/i.test(saved.id) && typeof saved.url === 'string') pendingJob = saved; } catch {}
+const jobNotice = document.createElement('div'), jobMessage = text('span', ''), resumeJob = text('button', '继续查询'), leaveJob = text('button', '查看历史后关闭提示');
+jobNotice.className = 'job-notice'; jobNotice.setAttribute('role', 'status'); resumeJob.type = leaveJob.type = 'button';
+jobNotice.append(jobMessage, resumeJob, leaveJob); el('main-content').prepend(jobNotice);
+function showPending(message = '有一项任务尚待确认，可继续查询结果。') {
+  jobNotice.hidden = !pendingJob; jobMessage.textContent = message; resumeJob.disabled = leaveJob.disabled = busy;
 }
-function post(url, value, method = 'POST') { return request(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) }); }
+function keepJob(value) {
+  pendingJob = value;
+  try { if (value) sessionStorage.setItem(pendingKey, JSON.stringify(value)); else sessionStorage.removeItem(pendingKey); } catch {}
+  showPending(); updateGenerateButton();
+}
+async function finishJob() {
+  try { const data = await waitForJob(pendingJob.id, { onProgress: showPending }); keepJob(undefined); return data; }
+  catch (error) { if (!error.pending) keepJob(undefined); else showPending(error.message); throw error; }
+}
+async function post(url, value, method = 'POST') {
+  const options = { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) };
+  if (method !== 'POST' || !(url === '/api/generate' || /\/sessions\/[\da-f-]+\/(edit|recheck)$/.test(url))) return request(url, options);
+  if (pendingJob) throw new Error('前一项任务尚待确认，请先点击“继续查询”或查看历史作品。');
+  // getRandomValues also works on a deployment accessed over HTTP by IP.
+  const bytes = crypto.getRandomValues(new Uint8Array(16)); bytes[6] = bytes[6] & 15 | 64; bytes[8] = bytes[8] & 63 | 128;
+  const hex = [...bytes].map(byte => byte.toString(16).padStart(2, '0')).join('');
+  const id = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`; keepJob({ id, url });
+  options.headers.Prefer = 'respond-async'; options.headers['X-Request-Id'] = id;
+  try {
+    const accepted = await request(url, options);
+    // Compatibility with an older server: never submit the same generation twice.
+    if (!accepted.jobId) { keepJob(undefined); return accepted; }
+  } catch (error) {
+    if (error.status && error.status < 500) { keepJob(undefined); throw error; }
+    // An interrupted response may still have accepted the work. Only query, never resubmit.
+  }
+  return finishJob();
+}
+resumeJob.addEventListener('click', async () => {
+  if (busy || !pendingJob) return;
+  const url = pendingJob.url; setBusy(true, '正在查询后台任务…');
+  try { const data = await finishJob(); if (url === '/api/generate') putTask(data.task); render(data, { openWorks: true }); el('error').textContent = ''; el('edit-error').textContent = ''; }
+  catch (error) { el('error').textContent = error.message; jobMessage.textContent = error.message; }
+  finally { setBusy(false); }
+});
+leaveJob.addEventListener('click', () => {
+  if (busy) return;
+  showView('history', { reset: true }); refreshHistory().catch(error => { el('history-error').textContent = error.message; });
+  if (confirm('请先确认历史中是否已有结果。关闭提示不会停止后台任务；再次生成可能产生额外费用。确认关闭？')) keepJob(undefined);
+});
+showPending();
 function text(tag, value, className) { const node = document.createElement(tag); node.textContent = value; if (className) node.className = className; return node; }
 function showStatus(status) {
   if (status.platforms) platformLimits = status.platforms;
@@ -102,7 +147,7 @@ function chooseProduct(id) {
 el('product').addEventListener('change', () => chooseProduct(el('product').value));
 let topicRequest = 0, topicLoading = false, tagLibrary, tagRequest = 0;
 function updateGenerateButton() {
-  el('generate').disabled = busy || topicLoading || !el('product').value || !el('audience').value;
+  el('generate').disabled = busy || !!pendingJob || topicLoading || !el('product').value || !el('audience').value;
   if (el('find-topics')) el('find-topics').disabled = topicLoading || !el('product').value || !el('audience').value;
 }
 function resetTopics(message = '热点可选：选好产品和人群后，点击“为我推荐”开始搜索。不限时间，新内容优先。') {
@@ -207,7 +252,7 @@ async function init() {
     const cards = await Promise.all(featured.map(async (product, index) => {
       const data = await showcase(product.id), card = document.createElement('button'); card.type = 'button'; card.className = 'product-card'; card.dataset.product = product.id; card.setAttribute('aria-label', `选择 ${product.name}`); card.setAttribute('aria-pressed', 'false');
       const image = cover(data), img = document.createElement('img'); if (image) img.src = image.url; img.alt = image?.description || product.name; img.loading = 'lazy';
-      const copy = text('span', '', 'card-copy'); copy.append(text('small', ['UNFOLD YOUR VISION', 'MAKE ROOM FOR IDEAS', 'COLOUR YOUR EVERYDAY'][index]), text('strong', product.name.replace('HUAWEI ', '')));
+      const copy = text('span', '', 'card-copy'); copy.append(text('small', ['HUAWEI PC / 折叠旗舰', 'HUAWEI PC / 灵感办公', 'HUAWEI PC / 多彩日常'][index]), text('strong', product.name.replace('HUAWEI ', '')));
       const bottom = text('span', '', 'card-bottom'); bottom.append(text('span', ['展开新的表达', '让灵感自由发生', '让日常多一点色彩'][index]), text('span', '↗', 'card-arrow')); copy.append(bottom); card.append(img, copy);
       card.addEventListener('click', () => { chooseProduct(product.id); showView('create', { reset: true }); }); return { card, index };
     }));
@@ -250,11 +295,12 @@ function putTask(task) {
   sourceSettings(); selectProduct(task.productId);
 }
 function currentContent() { return Object.fromEntries(contentFields.map(field => [field, el(`edit-${field}`).value])); }
-function gate() { return exportGate({ draft: result, platform: result?.task?.platform, loaded, dirty, busy }); }
+function gate() { return exportGate({ draft: result, platform: result?.task?.platform, loaded, dirty, busy: busy || !!pendingJob }); }
 function setBusy(value, message = '') {
   busy = value; document.body.classList.toggle('is-busy', value);
-  for (const id of ['save-edit', 'ai-edit', 'lock-selection', 'recheck', 'review-recheck', 'export', 'clear-history']) if (el(id)) el(id).disabled = value;
-  for (const field of contentFields) el(`edit-${field}`).disabled = value;
+  resumeJob.disabled = leaveJob.disabled = value;
+  for (const id of ['save-edit', 'ai-edit', 'lock-selection', 'recheck', 'review-recheck', 'export', 'clear-history']) if (el(id)) el(id).disabled = value || !!pendingJob;
+  for (const field of contentFields) el(`edit-${field}`).disabled = value || !!pendingJob;
   for (const button of document.querySelectorAll('#history button, #versions button, #locks button')) button.disabled = value;
   updateGenerateButton();
   if (result) renderVersions();
@@ -263,7 +309,7 @@ function setBusy(value, message = '') {
 }
 function updateState() {
   const state = gate(); el('export').disabled = !state.allowed; el('edit-state').textContent = busy ? el('edit-state').textContent : dirty ? '有未保存修改，停止输入后将自动保存并核验。' : state.reason;
-  el('review-recheck').disabled = !result || busy || dirty;
+  el('review-recheck').disabled = !result || busy || dirty || !!pendingJob;
   el('review-state').textContent = busy ? el('edit-state').textContent : dirty ? '正文有未保存修改，保存并核验后更新这里的审核结果。' : state.reason;
   if (result) {
     const queue = reviewClaims(result.verification), reviewState = result.verification.status === 'error' ? '核验流程失败' : queue.length ? `${queue.length} 项需人工关注` : '无待人工关注项';
@@ -348,7 +394,7 @@ async function saveManual(automatic = false) {
     if (error.status === 400 && message.includes('锁定')) {
       try { render(await request(`/api/sessions/${result.sessionId}`)); el('edit-error').textContent = `${message} 已恢复数据库中的当前版本。`; }
       catch { el('edit-error').textContent = `${message} 输入已保留，请恢复锁定原文后重新保存。`; }
-    } else el('edit-error').textContent = `${message} 当前输入已保留，尚未写入存档。`;
+    } else el('edit-error').textContent = `${message} 当前输入已保留，请查询任务或核对历史存档。`;
   }
   finally { setBusy(false); }
 }
@@ -401,26 +447,26 @@ async function refreshHistory() {
   }));
   if (!history.length) el('history-list').append(text('p', '还没有历史存档。首次生成后会自动保存在本地数据库。', 'history-empty'));
 }
-function resetResult() { clearTimeout(autoSaveTimer); result = undefined; dirty = false; selected = undefined; loaded = []; el('review-empty').hidden = false; el('review-context').hidden = true; el('review-error').textContent = ''; el('workspace').open = false; el('article').hidden = true; el('details').hidden = true; el('workspace').hidden = true; el('empty').hidden = false; el('empty-create').hidden = false; el('empty-title').textContent = '你的下一个作品，从这里诞生。'; el('empty-description').textContent = '选好产品，写下场景。文字、配图与事实依据，将在这里汇合。'; updateState(); }
+function resetResult() { clearTimeout(autoSaveTimer); result = undefined; dirty = false; selected = undefined; loaded = []; el('review-empty').hidden = false; el('review-context').hidden = true; el('review-error').textContent = ''; el('workspace').open = false; el('article').hidden = true; el('details').hidden = true; el('workspace').hidden = true; el('empty').hidden = false; el('empty-create').hidden = false; el('empty-title').textContent = '你的下一篇电脑营销文案，从这里开始。'; el('empty-description').textContent = '选好华为电脑、人群与角度，准备适合发布的宣传图文。'; updateState(); }
 el('clear-history').addEventListener('click', async () => { if (dirty || busy) return el('history-error').textContent = '请先完成当前修改的保存和核验。'; if (!confirm('清空全部会话、版本及持久化图片？此操作不可恢复。')) return; setBusy(true, '正在清空历史…'); try { await post('/api/history', { confirm: 'DELETE_ALL_HISTORY' }, 'DELETE'); resetResult(); await refreshHistory(); } catch (error) { el('history-error').textContent = error.message; } finally { setBusy(false); } });
 
 window.addEventListener('beforeunload', event => { if (dirty || busy) { event.preventDefault(); event.returnValue = ''; } });
 
 el('task').addEventListener('submit', async event => {
-  if (busy || dirty) { event.preventDefault(); el('error').textContent = '请先完成当前会话的保存和核验。'; return; }
+  if (busy || dirty || pendingJob) { event.preventDefault(); el('error').textContent = '请先完成当前会话的保存和核验，或查询尚待确认的任务。'; return; }
   event.preventDefault(); el('error').textContent = ''; resetResult(); el('loading').hidden = false; el('empty-create').hidden = true; el('empty-description').textContent = '系统会建立会话、读取事实、生成、核验并写入数据库。'; el('generate').disabled = true; el('generate').textContent = '正在创作、核验与存档…'; showView('works', { reset: true });
   setBusy(true);
   const start = Date.now(); el('elapsed').textContent = '0 秒'; const timer = setInterval(() => el('elapsed').textContent = `${Math.floor((Date.now() - start) / 1000)} 秒`, 1000);
   try { render(await post('/api/generate', taskFromForm()), { openWorks: true }); }
-  catch (error) { el('error').textContent = error.message; el('empty-title').textContent = '这一次创作未能完成。'; el('empty-description').textContent = error.message; el('empty-create').hidden = false; showView('works', { reset: true }); }
-  finally { clearInterval(timer); el('loading').hidden = true; setBusy(false); el('generate').replaceChildren(text('span', '生成并建立会话'), text('span', '↗')); }
+  catch (error) { el('error').textContent = error.message; el('empty-title').textContent = '暂未取得创作结果。'; el('empty-description').textContent = error.message; el('empty-create').hidden = false; showView('works', { reset: true }); }
+  finally { clearInterval(timer); el('loading').hidden = true; setBusy(false); el('generate').replaceChildren(text('span', '生成营销图文'), text('span', '↗')); }
 });
 el('export').addEventListener('click', async () => {
   if (!result || !gate().allowed) return;
   setBusy(true, '正在排版文字与实际配图，生成 PDF…');
   try {
     const response = await fetch(`/api/sessions/${result.sessionId}/export`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ expectedRevision: result.revision }) });
-    if (!response.ok) { const data = await response.json().catch(() => ({})); throw Object.assign(new Error(data.error || 'PDF 生成失败'), { status: response.status }); }
+    if (!response.ok) throw await responseError(response);
     const url = URL.createObjectURL(await response.blob()), link = document.createElement('a'); link.href = url; link.download = `营销图文方案-V${result.version}.pdf`; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); await refreshHistory();
   } catch (error) { el('edit-error').textContent = error.message; } finally { setBusy(false); }
 });

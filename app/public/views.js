@@ -64,7 +64,7 @@ export function showView(name, { reset = false, history = 'push', focus = true, 
     if (link.dataset.viewLink === name) link.setAttribute('aria-current', 'page');
     else link.removeAttribute('aria-current');
   }
-  document.title = `${labels[name]} · PC STUDIO`;
+  document.title = `${labels[name]} · 华为 PC 营销工作台`;
   const hash = `#/${name}`;
   if (history !== 'none' && location.hash !== hash) {
     window.history[history === 'replace' ? 'replaceState' : 'pushState'](null, '', hash);
