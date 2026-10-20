@@ -3,10 +3,60 @@ import { showView, scrollBehavior } from './views.js';
 const el = id => document.getElementById(id);
 let result, loaded = [], busy = false, dirty = false, autoSaveTimer, selected, selectionVersion = 0;
 const cache = new Map();
+const officialGallery = document.createElement('fieldset');
+officialGallery.className = 'choice-field official-gallery';
+officialGallery.innerHTML = '<legend>官网产品配图</legend><label class="check-control"><input id="auto-official-images" type="checkbox" checked><span><strong>生成时自动优先使用官网图片</strong><small>按电脑型号采集、缓存并挑选配图；也可以手动勾选。</small></span></label><button id="load-official-images" type="button" class="outline-button">浏览官网图片</button><p id="official-image-status" class="hint" role="status"></p><div id="official-image-options" class="official-image-options"></div>';
+document.querySelector('#task .settings').before(officialGallery);
+const officialSelections = new Map(), officialLoading = new Set();
+let platformLimits = {};
+function renderOfficialImages(productId, images = []) {
+  const chosen = officialSelections.get(productId) || new Set();
+  const max = platformLimits[el('platform').value]?.max || 6;
+  el('official-image-options').replaceChildren(...images.map(image => {
+    const card = document.createElement('div'); card.className = 'official-image-card';
+    const label = document.createElement('label'), checkbox = document.createElement('input'), img = document.createElement('img');
+    checkbox.type = 'checkbox'; checkbox.checked = chosen.has(image.id);
+    checkbox.addEventListener('change', () => {
+      if (checkbox.checked && chosen.size >= max) { checkbox.checked = false; el('official-image-status').textContent = `当前平台最多选择 ${max} 张图片。`; return; }
+      if (checkbox.checked) chosen.add(image.id); else chosen.delete(image.id);
+      officialSelections.set(productId, chosen);
+      el('official-image-status').textContent = `已选 ${chosen.size} 张官网图片；不足平台数量时补充本地素材。`;
+    });
+    img.src = image.url; img.alt = image.description; img.loading = 'lazy';
+    img.addEventListener('error', () => { checkbox.disabled = true; checkbox.checked = false; chosen.delete(image.id); officialSelections.set(productId, chosen); label.append(text('small', '图片不可用')); });
+    label.append(checkbox, img, text('span', image.description));
+    const link = document.createElement('a'); link.href = image.sourcePage; link.target = '_blank'; link.rel = 'noopener noreferrer'; link.textContent = '官网来源 ↗';
+    card.append(label, link); return card;
+  }));
+  el('load-official-images').disabled = !productId || officialLoading.has(productId);
+  el('load-official-images').textContent = officialLoading.has(productId) ? '正在采集…' : images.length ? '读取已缓存图片' : '加载官网图片';
+  el('official-image-status').textContent = images.length ? `${images.length} 张官网图片已缓存，手动选中 ${chosen.size} 张；不勾选时将在生成时自动选图。` : '生成时自动从官网采集并缓存；可先浏览手动选择。官网不可用时会注明回退素材。';
+}
+el('load-official-images').addEventListener('click', async () => {
+  const productId = el('product').value; if (!productId || officialLoading.has(productId)) return;
+  officialLoading.add(productId); el('load-official-images').disabled = true; el('load-official-images').textContent = '正在采集…';
+  el('official-image-status').textContent = '正在读取当前型号的官网图片，首次加载可能需要几十秒…';
+  try {
+    const data = await post('/api/official-images', { productId });
+    const existing = await showcase(productId); existing.officialImages = data.images;
+    if (el('product').value === productId) {
+      renderOfficialImages(productId, data.images);
+      if (!data.images.length) el('official-image-status').textContent = '官网暂未找到可用图片，可以继续使用已有本地素材，或稍后重试。';
+    }
+  } catch (error) { if (el('product').value === productId) el('official-image-status').textContent = error.message; }
+  finally {
+    officialLoading.delete(productId);
+    if (el('product').value === productId) { el('load-official-images').disabled = false; el('load-official-images').textContent = '加载官网图片'; }
+  }
+});
+el('platform').addEventListener('change', async () => {
+  const id = el('product').value, max = platformLimits[el('platform').value]?.max || 6;
+  officialSelections.set(id, new Set([...(officialSelections.get(id) || [])].slice(0, max)));
+  try { const data = await showcase(id); if (el('product').value === id) renderOfficialImages(id, data.officialImages); } catch {}
+});
 const integrationPanel = document.querySelector('.integration-panel');
 if (integrationPanel) {
-  const form = el('task'), introduction = integrationPanel.querySelector(':scope > p');
-  form.insertBefore(integrationPanel, form.querySelector('label'));
+  const introduction = integrationPanel.querySelector(':scope > p');
   introduction.textContent = '此工作台已接入 ima 官方 OpenAPI，Agent 可查找赛事共享知识库、浏览目录、检索产品资料并读取原文和图片。';
   const quota = document.createElement('p');
   quota.className = 'ima-quota';
@@ -24,27 +74,123 @@ async function request(url, options = {}) {
 function post(url, value, method = 'POST') { return request(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) }); }
 function text(tag, value, className) { const node = document.createElement(tag); node.textContent = value; if (className) node.className = className; return node; }
 function showStatus(status) {
+  if (status.platforms) platformLimits = status.platforms;
   const imaText = !status.ima.configured ? '未配置' : status.ima.verified ? '已配置并验证' : `已配置 · ${status.ima.message || '尚未验证'}`;
   el('ima-status').textContent = imaText; el('ima-status').dataset.state = status.ima.verified ? 'verified' : status.ima.configured ? 'configured' : 'missing';
   el('ima-home-status').textContent = `ima ${imaText}`;
   el('connection').textContent = `ima：${imaText} · DeepSeek ${status.model.model || ''}：${status.model.configured ? status.model.message : '未配置'} · ${status.storage}`;
 }
 async function showcase(id) { if (!cache.has(id)) cache.set(id, request(`/api/showcase?productId=${encodeURIComponent(id)}`)); return cache.get(id); }
-function cover(data) { return data.images.find(image => image.name.includes('高质感主视觉')) || data.images[0]; }
+function cover(data) { return data.officialImages?.find(image => /(?:key-vision|[-_]kv[0-9]*[.])/.test(image.sourceUrl)) || data.officialImages?.[0] || data.images.find(image => image.name.includes('高质感主视觉')) || data.images[0]; }
 async function selectProduct(id) {
   el('product').value = id; const version = ++selectionVersion;
   for (const card of el('product-cards').children) card.setAttribute('aria-pressed', String(card.dataset.product === id));
   el('selected-image').hidden = true; el('asset-count').textContent = '正在读取本地素材…';
+  renderOfficialImages(id);
   try {
     const data = await showcase(id); if (version !== selectionVersion) return;
-    el('selected-name').textContent = data.product.name; el('asset-count').textContent = `${data.images.length} 张本地参考图片`;
+    el('selected-name').textContent = data.product.name; el('asset-count').textContent = data.officialImages?.length ? `${data.officialImages.length} 张官网缓存图片` : '生成时自动获取官网图片';
+    renderOfficialImages(id, data.officialImages);
     const image = cover(data); if (image) { el('selected-image').src = image.url; el('selected-image').alt = image.description; el('selected-image').hidden = false; }
   } catch (error) { if (version === selectionVersion) { el('asset-count').textContent = '素材暂不可用'; el('error').textContent = error.message; } }
 }
 el('selected-image').addEventListener('error', () => { el('selected-image').hidden = true; el('asset-count').textContent = '预览图片不可用，请检查素材'; });
-el('product').addEventListener('change', () => selectProduct(el('product').value));
-const presets = { campus: ['大学新生', '开学购机，日常学习与携带'], work: ['经常出差的职场人士', '通勤、出差与移动办公'], creative: ['内容创作者', '记录灵感，进行日常图文创作'] };
-document.querySelectorAll('[data-preset]').forEach(button => button.addEventListener('click', () => { [el('audience').value, el('scene').value] = presets[button.dataset.preset]; }));
+function chooseProduct(id) {
+  selectProduct(id);
+  resetTopics();
+}
+el('product').addEventListener('change', () => chooseProduct(el('product').value));
+let topicRequest = 0, topicLoading = false, tagLibrary, tagRequest = 0;
+function updateGenerateButton() {
+  el('generate').disabled = busy || topicLoading || !el('product').value || !el('audience').value;
+  if (el('find-topics')) el('find-topics').disabled = topicLoading || !el('product').value || !el('audience').value;
+}
+function resetTopics(message = '热点可选：选好产品和人群后，点击“为我推荐”开始搜索。不限时间，新内容优先。') {
+  topicRequest++;
+  topicLoading = false;
+  el('selected-topic').value = 'skip';
+  el('topic-options').replaceChildren();
+  el('topic-status').textContent = message;
+  el('find-topics').disabled = false;
+  updateGenerateButton();
+}
+function selectAudience(value) {
+  el('audience').value = value;
+  for (const button of el('audience-options').querySelectorAll('[data-audience]')) button.setAttribute('aria-pressed', String(button.dataset.audience === value));
+  clearPresetTag();
+  resetTopics();
+  loadRecommendedTags();
+}
+function renderTagGroup(containerId, tags) {
+  const container = el(containerId);
+  container.replaceChildren(...tags.map(tag => {
+    const button = text('button', '', 'preset-tag'); button.type = 'button'; button.dataset.tagId = tag.id; button.setAttribute('aria-pressed', String(el('selected-tag').value === tag.id));
+    button.append(text('strong', tag.label), text('span', tag.angle));
+    button.addEventListener('click', () => selectPresetTag(tag));
+    return button;
+  }));
+}
+function selectPresetTag(tag) {
+  el('selected-tag').value = tag.id; el('selected-topic').value = 'skip';
+  for (const button of document.querySelectorAll('[data-tag-id]')) button.setAttribute('aria-pressed', String(button.dataset.tagId === tag.id));
+  el('topic-options').replaceChildren(); el('topic-status').textContent = '已选择预制创作方向；如需实时热点，请单独点击“为我推荐”。';
+  if (el('scene')) el('scene').value = '';
+  updateGenerateButton();
+}
+function clearPresetTag() {
+  el('selected-tag').value = '';
+  for (const button of document.querySelectorAll('[data-tag-id]')) button.setAttribute('aria-pressed', 'false');
+  updateGenerateButton();
+}
+function initTagLibrary(data) {
+  tagLibrary = data;
+  loadRecommendedTags();
+  el('skip-tag').addEventListener('click', clearPresetTag);
+}
+async function loadRecommendedTags() {
+  if (!tagLibrary) return;
+  const requestId = ++tagRequest;
+  for (const id of ['category-tag-options', 'timing-tag-options']) el(id).replaceChildren(text('span', '正在匹配…', 'tag-loading'));
+  try {
+    const data = await request(`/api/tags/recommend?audience=${encodeURIComponent(el('audience').value)}`);
+    if (requestId !== tagRequest) return;
+    renderTagGroup('category-tag-options', data.scenes);
+    renderTagGroup('timing-tag-options', data.timing);
+  } catch (error) {
+    if (requestId === tagRequest) for (const id of ['category-tag-options', 'timing-tag-options']) el(id).replaceChildren(text('span', `推荐暂不可用：${error.message}`, 'tag-loading'));
+  }
+}
+async function loadTopics() {
+  const requestId = ++topicRequest, productId = el('product').value, audience = el('audience').value;
+  if (!productId || !audience) { el('topic-status').textContent = '请先选择产品和人群，再点击“为我推荐”。'; el('find-topics').disabled = false; return; }
+  topicLoading = true; el('selected-topic').value = 'skip'; el('generate').disabled = true;
+  el('topic-options').replaceChildren(); el('find-topics').disabled = true;
+  el('topic-status').textContent = '正在按人群和场景标签搜索热点，不限时间，新内容优先…';
+  try {
+    const data = await post('/api/topics', { productId, audience });
+    if (requestId !== topicRequest) return;
+    el('topic-status').textContent = data.topics.length
+      ? `AI筛选出 ${data.topics.length} 条可用素材 · 搜索于 ${new Date(data.searchedAt).toLocaleString()}`
+      : '未筛选到适合当前产品和人群的素材（搜索不限时间）。可重试，也可直接生成文案。';
+    el('topic-options').replaceChildren(...data.topics.map(topic => {
+      const item = text('article', '', 'topic-item'), choose = text('button', '', 'topic-choice'); choose.type = 'button';
+      choose.append(text('span', topic.tag, 'topic-tag'), text('strong', topic.title), text('span', topic.summary), text('span', `创作角度：${topic.angle}`, 'topic-angle'), text('span', `发布时间：${topic.publishedAt ? new Date(topic.publishedAt).toLocaleString() : '未注明'}`, 'topic-date'));
+      choose.addEventListener('click', () => {
+        clearPresetTag();
+        el('selected-topic').value = JSON.stringify(topic); el('scene').value = '';
+        for (const button of el('topic-options').querySelectorAll('.topic-choice')) button.setAttribute('aria-pressed', String(button === choose));
+        el('topic-status').textContent = `已选择热点 · ${new Date(topic.publishedAt).toLocaleDateString()}`; updateGenerateButton();
+      });
+      const source = text('a', new URL(topic.url).hostname); source.href = topic.url; source.target = '_blank'; source.rel = 'noopener noreferrer';
+      item.append(choose, source); return item;
+    }));
+  } catch (error) {
+    if (requestId === topicRequest) el('topic-status').textContent = `${error.message} 可重试，或选择“不结合热点”。`;
+  } finally { if (requestId === topicRequest) { topicLoading = false; el('find-topics').disabled = false; updateGenerateButton(); } }
+}
+document.querySelectorAll('[data-audience]').forEach(button => button.addEventListener('click', () => selectAudience(button.dataset.audience)));
+el('find-topics').addEventListener('click', loadTopics);
+el('skip-topic').addEventListener('click', () => resetTopics('本次不结合热点，可直接生成文案。'));
 function sourceSettings() {
   if (el('source').value === 'ima') { el('engine').value = 'model'; el('engine').querySelector('[value="rules"]').disabled = true; } else el('engine').querySelector('[value="rules"]').disabled = false;
   el('source-label').textContent = `${el('source').value === 'local' ? '本地参考' : '本地 + ima'} / ${el('engine').value === 'model' ? 'DeepSeek' : '规则草稿'}`;
@@ -54,7 +200,8 @@ el('verify').addEventListener('click', async () => { el('verify').disabled = tru
 
 async function init() {
   try {
-    const [status, products] = await Promise.all([request('/api/status'), request('/api/products')]); showStatus(status);
+    initVoiceControl();
+    const [status, products, tags] = await Promise.all([request('/api/status'), request('/api/products'), request('/api/tags')]); showStatus(status); initTagLibrary(tags);
     el('product').replaceChildren(...products.map(product => new Option(product.name, product.id)));
     const featured = ['HUAWEI MateBook Fold 非凡大师', 'HUAWEI MateBook Pro', 'HUAWEI MateBook 14（鸿蒙版）'].map(name => products.find(product => product.name === name)).filter(Boolean);
     const cards = await Promise.all(featured.map(async (product, index) => {
@@ -62,21 +209,43 @@ async function init() {
       const image = cover(data), img = document.createElement('img'); if (image) img.src = image.url; img.alt = image?.description || product.name; img.loading = 'lazy';
       const copy = text('span', '', 'card-copy'); copy.append(text('small', ['UNFOLD YOUR VISION', 'MAKE ROOM FOR IDEAS', 'COLOUR YOUR EVERYDAY'][index]), text('strong', product.name.replace('HUAWEI ', '')));
       const bottom = text('span', '', 'card-bottom'); bottom.append(text('span', ['展开新的表达', '让灵感自由发生', '让日常多一点色彩'][index]), text('span', '↗', 'card-arrow')); copy.append(bottom); card.append(img, copy);
-      card.addEventListener('click', () => { selectProduct(product.id); showView('create', { reset: true }); }); return { card, index };
+      card.addEventListener('click', () => { chooseProduct(product.id); showView('create', { reset: true }); }); return { card, index };
     }));
     el('product-cards').replaceChildren(...cards.sort((a, b) => a.index - b.index).map(item => item.card));
     const first = featured[0] || products[0]; if (first) { const data = await showcase(first.id); if (cover(data)) el('hero-image').src = cover(data).url; await selectProduct(first.id); }
-    el('generate').disabled = !products.length; await refreshHistory();
+    resetTopics(); await refreshHistory();
   } catch (error) { el('error').textContent = `初始化失败：${error.message}`; }
 }
 
+function initVoiceControl() {
+  const platform = el('platform');
+  if (!platform || el('voice')) return;
+  const label = text('label', '07　表达语气');
+  const select = document.createElement('select'); select.id = 'voice';
+  for (const [value, name] of [['friendly', '明快亲切'], ['warm', '温暖陪伴'], ['professional', '简洁专业']]) select.add(new Option(name, value));
+  label.append(select, text('small', '语气会影响正文和结尾引导，不改变产品事实。', 'field-hint'));
+  platform.closest('.field-row').after(label);
+}
 function taskFromForm() {
-  return { productId: el('product').value, audience: el('audience').value, scene: el('scene').value, platform: el('platform').value,
-    mode: el('source').value, engine: el('engine').value, revision: el('revision').value,
-    webUrls: el('web-url').value.trim() ? [el('web-url').value.trim()] : [], autoWeb: el('auto-web').checked };
+  let topic = null; try { if (el('selected-topic').value && el('selected-topic').value !== 'skip') topic = JSON.parse(el('selected-topic').value); } catch {}
+  return { productId: el('product').value, officialImageIds: [...(officialSelections.get(el('product').value) || [])], autoOfficialImages: el('auto-official-images').checked, tagId: el('selected-tag').value || '', audience: el('audience').value, scene: el('scene').value, platform: el('platform').value,
+    ecosystemDevices: [...document.querySelectorAll('input[name="ecosystem"]:checked')].map(input => input.value),
+    mode: el('source').value, engine: el('engine').value, revision: el('revision').value, voice: el('voice')?.value || 'friendly',
+    topic, webUrls: el('web-url').value.trim() ? [el('web-url').value.trim()] : [], autoWeb: el('auto-web').checked };
 }
 function putTask(task) {
-  for (const [id, value] of [['product', task.productId], ['audience', task.audience], ['scene', task.scene], ['platform', task.platform], ['source', task.mode], ['engine', task.engine], ['revision', task.revision || ''], ['web-url', task.webUrls?.[0] || '']]) if (el(id)) el(id).value = value;
+  officialSelections.set(task.productId, new Set(task.officialImageIds || []));
+  el('auto-official-images').checked = task.autoOfficialImages !== false;
+  for (const [id, value] of [['product', task.productId], ['audience', task.audience], ['scene', task.scene], ['platform', task.platform], ['voice', task.voice || 'friendly'], ['source', task.mode], ['engine', task.engine], ['revision', task.revision || ''], ['web-url', task.webUrls?.[0] || '']]) if (el(id)) el(id).value = value;
+  for (const button of el('audience-options').querySelectorAll('[data-audience]')) button.setAttribute('aria-pressed', String(button.dataset.audience === task.audience));
+  for (const input of document.querySelectorAll('input[name="ecosystem"]')) input.checked = (task.ecosystemDevices || []).includes(input.value);
+  if (tagLibrary) {
+    el('selected-tag').value = task.tag?.id || '';
+    loadRecommendedTags();
+  }
+  resetTopics();
+  el('selected-topic').value = task.topic?.title ? JSON.stringify(task.topic) : 'skip';
+  if (task.topic?.title) el('topic-status').textContent = `已恢复热点：${task.topic.title}`;
   el('auto-web').checked = task.autoWeb !== false;
   sourceSettings(); selectProduct(task.productId);
 }
@@ -84,32 +253,36 @@ function currentContent() { return Object.fromEntries(contentFields.map(field =>
 function gate() { return exportGate({ draft: result, platform: result?.task?.platform, loaded, dirty, busy }); }
 function setBusy(value, message = '') {
   busy = value; document.body.classList.toggle('is-busy', value);
-  for (const id of ['save-edit', 'ai-edit', 'lock-selection', 'recheck', 'export', 'clear-history']) if (el(id)) el(id).disabled = value;
+  for (const id of ['save-edit', 'ai-edit', 'lock-selection', 'recheck', 'review-recheck', 'export', 'clear-history']) if (el(id)) el(id).disabled = value;
   for (const field of contentFields) el(`edit-${field}`).disabled = value;
   for (const button of document.querySelectorAll('#history button, #versions button, #locks button')) button.disabled = value;
-  el('generate').disabled = value;
+  updateGenerateButton();
   if (result) renderVersions();
   if (message) el('edit-state').textContent = message;
   updateState();
 }
 function updateState() {
   const state = gate(); el('export').disabled = !state.allowed; el('edit-state').textContent = busy ? el('edit-state').textContent : dirty ? '有未保存修改，停止输入后将自动保存并核验。' : state.reason;
+  el('review-recheck').disabled = !result || busy || dirty;
+  el('review-state').textContent = busy ? el('edit-state').textContent : dirty ? '正文有未保存修改，保存并核验后更新这里的审核结果。' : state.reason;
   if (result) {
     const queue = reviewClaims(result.verification), reviewState = result.verification.status === 'error' ? '核验流程失败' : queue.length ? `${queue.length} 项需人工关注` : '无待人工关注项';
     el('result-status').textContent = `V${result.version} · ${reviewState} · ${state.allowed ? '可导出 PDF' : '暂不可导出'}`;
   }
 }
 function renderVerification(report) {
-  const queue = reviewClaims(report), conflicts = queue.filter(claim => claim.status === 'conflict').length, webOnly = queue.length - conflicts;
-  el('verification-summary').textContent = report.status === 'error' ? '核验流程未完成，当前版本不可导出；请在编辑区重新核验。' : queue.length ? '以下内容需要人工判断：明确冲突，或仅由商城网页支持、尚未得到文档或 ima 支持的表述。' : '暂无需要人工关注的事实。文档或 ima 已支持、以及无明确依据的条目不在这里展示。';
-  el('verification-counts').textContent = `${conflicts} 项冲突 · ${webOnly} 项仅网页支持`;
+  const queue = reviewClaims(report), conflicts = report.claims?.filter(claim => claim.status === 'conflict').length || 0;
+  el('verification-summary').textContent = report.status === 'error' ? '核验流程未完成，当前版本不可导出；请在编辑区重新核验。' : conflicts ? `仍有 ${conflicts} 项事实与依据冲突，自动修订未能解决，当前阻断导出。` : queue.length ? '仅以下缺少明确依据的表述需要你确认；仅显示相关原文摘录，没有参考时会明确标注。' : '所有可核验事实均已找到依据并核对通过。';
+  el('verification-counts').textContent = `${queue.length} 项待人工确认 · ${conflicts} 项未解决冲突`;
   el('claims').replaceChildren(...queue.map(claim => {
-    const webClaim = claim.status === 'verified', item = text('article', '', `claim ${webClaim ? 'web-only' : claim.status}`), heading = text('button', `${webClaim ? '↗' : statusIcon[claim.status]} ${claim.statement}`); heading.type = 'button';
-    heading.addEventListener('click', () => { const input = el(`edit-${claim.field}`), start = input.value.indexOf(claim.statement); if (start >= 0) { input.focus({ preventScroll: true }); input.setSelectionRange(start, start + claim.statement.length); captureSelection(input); input.scrollIntoView({ behavior: scrollBehavior(), block: 'center' }); } });
+    const item = text('article', '', `claim ${claim.status}`), heading = text('button', `${statusIcon[claim.status]} ${claim.statement}`); heading.type = 'button';
+    heading.addEventListener('click', () => { const input = el(`edit-${claim.field}`), start = input.value.indexOf(claim.statement); if (start >= 0) { showView('works'); el('workspace').open = true; input.focus({ preventScroll: true }); input.setSelectionRange(start, start + claim.statement.length); captureSelection(input); input.scrollIntoView({ behavior: scrollBehavior(), block: 'center' }); } });
     item.append(heading, text('p', claim.explanation));
+    if (!claim.evidence?.length) item.append(text('p', '没有找到可引用的相关依据。', 'hint'));
     for (const cite of claim.evidence || []) {
       const detail = document.createElement('details'), summary = text('summary', cite.path || cite.sourceId), quote = text('p', `原文：${cite.quote}`); detail.append(summary, quote);
       if (cite.kind === 'web' && /^https:\/\/(www|item|m)\.vmall\.com\//.test(cite.path || '')) { const link = text('a', '打开华为商城原页 ↗'); link.href = cite.path; link.target = '_blank'; link.rel = 'noopener noreferrer'; detail.append(link); }
+      if (cite.kind === 'ecosystem-web' && /^https:\/\/consumer\.huawei\.com\/cn\//.test(cite.path || '')) { const link = text('a', '打开华为消费者业务原页 ↗'); link.href = cite.path; link.target = '_blank'; link.rel = 'noopener noreferrer'; detail.append(link); }
       item.append(detail);
     }
     return item;
@@ -129,12 +302,21 @@ function renderVersions() {
   }));
 }
 function render(data, { openWorks = false } = {}) {
+  cache.delete(data.task.productId);
   clearTimeout(autoSaveTimer); result = data; dirty = false; selected = undefined; loaded = data.images.map(() => 'loading');
   el('selection-text').textContent = '先在任一编辑框中划选文字';
   for (const field of contentFields) { el(`edit-${field}`).value = data[field] || ''; el(field).textContent = data[field] || ''; }
   el('session-id').textContent = `会话 ${data.sessionId.slice(0, 8)} · 当前 V${data.version}`; el('mode').textContent = data.label;
-  el('strategy').textContent = [data.strategy.angle, data.strategy.tone, data.strategy.note].filter(Boolean).join('。'); el('facts').textContent = data.evidence.facts; el('source-path').textContent = data.evidence.path;
+  el('strategy').textContent = [data.strategy.angle, data.strategy.tone, data.strategy.voice ? `表达语气：${data.strategy.voice}` : '', data.strategy.note].filter(Boolean).join('。');
+  const imageStatus = el('image-selection-status') || text('p', '', 'hint');
+  imageStatus.id = 'image-selection-status';
+  imageStatus.textContent = data.imageSelection ? `配图：官网 ${data.imageSelection.officialCount} 张，已有素材 ${data.imageSelection.fallbackCount} 张。${data.imageSelection.summary}` : '此历史版本沿用原有配图；新生成任务默认优先使用官网图片。';
+  el('images').before(imageStatus);
   el('empty').hidden = true; el('article').hidden = false; el('details').hidden = false; el('workspace').hidden = false;
+  el('review-empty').hidden = true; el('review-context').hidden = false;
+  el('review-title').textContent = data.title;
+  el('review-error').textContent = '';
+  if (openWorks) el('workspace').open = false;
   el('images').replaceChildren(...data.images.map((item, index) => {
     const figure = document.createElement('figure'), img = document.createElement('img'); img.alt = item.description || item.name;
     const mark = state => { if (result !== data) return; loaded[index] = state; updateState(); }; img.addEventListener('load', () => mark('loaded')); img.addEventListener('error', () => mark('failed')); img.src = item.url;
@@ -189,13 +371,15 @@ async function updateLock(operation) {
   finally { setBusy(false); }
 }
 el('lock-selection').addEventListener('click', () => updateLock({ operation: 'add' }));
-el('recheck').addEventListener('click', async () => {
+async function recheck() {
   if (!result || dirty) return el('edit-error').textContent = '请先保存当前文字修改。';
   setBusy(true, '正在重新读取事实并核验当前版本…');
   try { render(await post(`/api/sessions/${result.sessionId}/recheck`, { expectedRevision: result.revision })); el('edit-error').textContent = ''; }
-  catch (error) { el('edit-error').textContent = error.message; }
+  catch (error) { el('edit-error').textContent = error.message; el('review-error').textContent = error.message; }
   finally { setBusy(false); }
-});
+}
+el('recheck').addEventListener('click', recheck);
+el('review-recheck').addEventListener('click', recheck);
 async function checkout(version) {
   if (!result || dirty || busy) return el('edit-error').textContent = '请先完成当前修改的保存和核验，再切换版本。';
   if (!confirm(`切换到 V${version}？当前版本仍会保留在历史中。`)) return;
@@ -217,7 +401,7 @@ async function refreshHistory() {
   }));
   if (!history.length) el('history-list').append(text('p', '还没有历史存档。首次生成后会自动保存在本地数据库。', 'history-empty'));
 }
-function resetResult() { clearTimeout(autoSaveTimer); result = undefined; dirty = false; selected = undefined; loaded = []; el('article').hidden = true; el('details').hidden = true; el('workspace').hidden = true; el('empty').hidden = false; el('empty-create').hidden = false; el('empty-title').textContent = '你的下一个作品，从这里诞生。'; el('empty-description').textContent = '选好产品，写下场景。文字、配图与事实依据，将在这里汇合。'; updateState(); }
+function resetResult() { clearTimeout(autoSaveTimer); result = undefined; dirty = false; selected = undefined; loaded = []; el('review-empty').hidden = false; el('review-context').hidden = true; el('review-error').textContent = ''; el('workspace').open = false; el('article').hidden = true; el('details').hidden = true; el('workspace').hidden = true; el('empty').hidden = false; el('empty-create').hidden = false; el('empty-title').textContent = '你的下一个作品，从这里诞生。'; el('empty-description').textContent = '选好产品，写下场景。文字、配图与事实依据，将在这里汇合。'; updateState(); }
 el('clear-history').addEventListener('click', async () => { if (dirty || busy) return el('history-error').textContent = '请先完成当前修改的保存和核验。'; if (!confirm('清空全部会话、版本及持久化图片？此操作不可恢复。')) return; setBusy(true, '正在清空历史…'); try { await post('/api/history', { confirm: 'DELETE_ALL_HISTORY' }, 'DELETE'); resetResult(); await refreshHistory(); } catch (error) { el('history-error').textContent = error.message; } finally { setBusy(false); } });
 
 window.addEventListener('beforeunload', event => { if (dirty || busy) { event.preventDefault(); event.returnValue = ''; } });

@@ -27,6 +27,12 @@ export class HistoryStore {
         id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
         type TEXT NOT NULL, data BLOB NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS official_images (
+        id TEXT PRIMARY KEY, product_id TEXT NOT NULL, source_url TEXT NOT NULL,
+        source_page TEXT NOT NULL, name TEXT NOT NULL, description TEXT NOT NULL,
+        type TEXT NOT NULL, data BLOB NOT NULL, cached_at TEXT NOT NULL,
+        UNIQUE(product_id, source_url)
+      );
       PRAGMA user_version=1;`);
   }
   transaction(fn) {
@@ -97,6 +103,19 @@ export class HistoryStore {
     const asset = this.db.prepare('SELECT type,data FROM assets WHERE id=?').get(id);
     if (!asset) throw problem('存档图片不存在。', 404);
     return asset;
+  }
+  saveOfficialImage(image) {
+    this.db.prepare(`INSERT INTO official_images VALUES(?,?,?,?,?,?,?,?,?)
+      ON CONFLICT(product_id,source_url) DO NOTHING`)
+      .run(image.id, image.productId, image.sourceUrl, image.sourcePage, image.name, image.description, image.type, image.data, image.cachedAt || new Date().toISOString());
+  }
+  officialImages(productId) {
+    return this.db.prepare('SELECT id,product_id AS productId,source_url AS sourceUrl,source_page AS sourcePage,name,description,type,cached_at AS cachedAt FROM official_images WHERE product_id=? ORDER BY cached_at DESC,id LIMIT 24').all(productId).map(image => ({ ...image, url: `/api/official-image/${image.id}` }));
+  }
+  officialImage(id) {
+    const image = this.db.prepare('SELECT * FROM official_images WHERE id=?').get(id);
+    if (!image) throw problem('官方图片缓存不存在。', 404);
+    return image;
   }
   delete(id) {
     if (!this.db.prepare('DELETE FROM sessions WHERE id=?').run(id).changes) throw problem('历史不存在。', 404);

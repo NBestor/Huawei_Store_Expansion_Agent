@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { HistoryStore, present } from '../lib/store.mjs';
 import { addLock, mergeManual, mergeReplacement } from '../lib/editor.mjs';
 import { normalizeVerification } from '../lib/verification.mjs';
-import { discoverVmall, FactTools, fetchVmall, vmallUrl } from '../lib/knowledge.mjs';
+import { discoverVmall, EcosystemTools, FactTools, fetchVmall, huaweiConsumerUrl, vmallUrl } from '../lib/knowledge.mjs';
 import { products } from '../lib/local.mjs';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -76,6 +76,22 @@ test('P1 tool index is product scoped and vmall whitelist is exact', async () =>
   assert.throws(() => vmallUrl('https://vmall.com/test'));
   assert.throws(() => vmallUrl('https://www.vmall.com.evil.example/test'));
   assert.throws(() => vmallUrl('http://www.vmall.com/test'));
+});
+test('ecosystem discovery reads only allowlisted official category and product pages', async () => {
+  assert.equal(huaweiConsumerUrl('https://consumer.huawei.com/cn/phones/?x=1#top'), 'https://consumer.huawei.com/cn/phones/?x=1');
+  for (const url of ['http://consumer.huawei.com/cn/phones/', 'https://consumer.huawei.com.evil.example/cn/phones/', 'https://consumer.huawei.com/global/phones/', 'https://evil.example/cn/phones/']) assert.throws(() => huaweiConsumerUrl(url));
+  const requested = [];
+  const transport = async value => {
+    const url = new URL(value); requested.push(url.href);
+    const body = url.pathname === '/cn/phones/'
+      ? '<html><title>华为手机</title><body>华为手机产品列表与官方产品说明，了解各系列产品详情。页面提供多款手机的功能特点、产品设计与适用场景介绍，请前往型号页查看完整信息。</body><a href="/cn/phones/mate-x6/">Mate X6</a><a href="https://evil.example/cn/phones/other/">坏链接</a></html>'
+      : '<html><title>HUAWEI Mate X6</title><body>HUAWEI Mate X6 支持与部分华为笔记本多屏协同。具体支持范围以产品说明为准。使用前请确认设备系统版本、账号与连接条件符合官方说明。</body></html>';
+    return new Response(body, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+  };
+  const result = await new EcosystemTools(['phone'], transport).discover();
+  assert.deepEqual(requested, ['https://consumer.huawei.com/cn/phones/', 'https://consumer.huawei.com/cn/phones/mate-x6/']);
+  assert.equal(result.documents.length, 1); assert.equal(result.documents[0].kind, 'ecosystem-web');
+  assert.match(result.documents[0].text, /多屏协同/); assert.equal(result.documents[0].ecosystemCategory, 'phone');
 });
 test('automatic discovery uses exact product rows and reads only matching vmall product pages', async () => {
   const product = (await products()).find(item => item.name === 'HUAWEI MateBook 14（鸿蒙版）');

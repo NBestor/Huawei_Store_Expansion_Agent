@@ -1,6 +1,7 @@
 import { failure } from './config.mjs';
 import { generate, platforms } from './workflow.mjs';
 import { contentOf, fields } from './editor.mjs';
+import { editorialReport } from './editorial.mjs';
 
 export function sourceChunks(evidence) {
   if (evidence.documents?.length) {
@@ -43,7 +44,7 @@ export function finalize(task, source, draft, verification, points = [], revisio
   const result = generate(task, source), platform = platforms[task.platform];
   Object.assign(result, contentOf(draft), { product: source.product, citations: (draft.citations || points).filter(cite => fields.some(field => draft[field]?.includes(cite.statement))), verification,
     mode: `${source.sourceMode}-${task.engine === 'model' ? 'model' : 'rule'}-draft`,
-    label: `${source.sourceMode === 'ima' ? '本地 + ima' : '本地赛事参考'}${source.documents?.some(doc => doc.kind === 'web') ? ' + 华为商城' : ''} · ${task.engine === 'model' ? 'DeepSeek 草稿' : '离线规则草稿'}`,
+    label: `${source.sourceMode === 'ima' ? '本地 + ima' : '本地赛事参考'}${source.documents?.some(doc => doc.kind === 'web') ? ' + 华为商城' : ''}${source.documents?.some(doc => doc.kind === 'ecosystem-web') ? ' + 华为消费者官网' : ''} · ${task.engine === 'model' ? 'DeepSeek 草稿' : '离线规则草稿'}`,
     evidence: { facts: source.facts, path: source.factPath, sources: source.sources, documents: source.documents || [], chunks: sourceChunks(source), trace: source.trace || [] } });
   result.strategy.angle = typeof draft.angle === 'string' ? draft.angle : draft.strategy?.angle || result.strategy.angle;
   result.strategy.note = '事实核验只评估产品主张；无依据标警告，事实冲突阻断导出。配图尚未进行视觉核验。';
@@ -56,5 +57,10 @@ export function finalize(task, source, draft, verification, points = [], revisio
     { name: '图片型号与数量', status: result.images.length >= platform.min && result.images.length <= platform.max ? 'pass' : 'conflict', detail: `选用 ${result.images.length} 张，平台要求 ${platform.min}–${platform.max} 张；按型号目录/索引匹配，未实施视觉核验。` },
   ];
   result.exportable = result.audit.approved && result.checks[2].status === 'pass';
+  if (task.engine === 'model') {
+    result.editorial = editorialReport(task.platform, draft);
+    result.checks.push({ name: '平台篇幅', status: result.editorial.status === 'within-target' ? 'pass' : 'pending', detail: result.editorial.summary });
+    result.strategy.note += ` ${result.editorial.summary}${result.editorial.status === 'within-target' ? '' : '，未达建议范围，可继续精修；不以凑字数替代事实准确'}。`;
+  }
   return result;
 }

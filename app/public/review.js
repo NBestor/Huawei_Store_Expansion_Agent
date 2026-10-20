@@ -4,9 +4,7 @@ export function contentOf(draft) { return Object.fromEntries(contentFields.map(k
 export function contentChanged(draft, original) { return contentFields.some(key => draft[key] !== original[key]); }
 // Keep the complete report in storage. This is only the user's review queue.
 export function reviewClaims(report) {
-  return (report?.claims || []).filter(claim => claim.status === 'conflict' ||
-    claim.status === 'verified' && claim.evidence?.some(cite => cite.kind === 'web') &&
-    !claim.evidence?.some(cite => ['local', 'ima'].includes(cite.kind)));
+  return (report?.claims || []).filter(claim => claim.status === 'warning');
 }
 // Shared by server and UI: warnings allow a draft export, conflicts and stale checks never do.
 export function exportGate({ draft, platform, loaded, dirty = false, busy = false }) {

@@ -9,7 +9,9 @@ import { DeepSeekAdapter } from './lib/model.mjs';
 import { safeError } from './lib/config.mjs';
 import { HistoryStore, present, problem } from './lib/store.mjs';
 import { Studio } from './lib/studio.mjs';
-import { factIndex } from './lib/knowledge.mjs';
+import { cacheOfficialProductImages, factIndex, distinctOfficialImages } from './lib/knowledge.mjs';
+import { searchTopics } from './lib/topics.mjs';
+import { getTagLibrary, recommendPresetTags } from './lib/tags.mjs';
 const publicRoot = fileURLToPath(new URL('./public/', import.meta.url));
 const types = { '.html': 'text/html; charset=utf-8', '.css': 'text/css', '.js': 'text/javascript', '.jpg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp' };
 const json = (res, status, value) => { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(value)); };
@@ -20,9 +22,9 @@ async function bodyOf(req) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw problem('请求格式错误。');
   return value;
 }
-export function createApp({ store, model = new DeepSeekAdapter(), ima = new ImaAdapter() } = {}) {
+export function createApp({ store, model = new DeepSeekAdapter(), ima = new ImaAdapter(), topicSearch = searchTopics, imageTransport = fetch } = {}) {
   let studio, verifying = false;
-  const service = () => studio ||= new Studio(store ||= new HistoryStore(), model, ima);
+  const service = () => studio ||= new Studio(store ||= new HistoryStore(), model, ima, imageTransport);
   const app = http.createServer(async (req, res) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Content-Security-Policy', "default-src 'self'; img-src 'self'; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'");
@@ -32,9 +34,30 @@ export function createApp({ store, model = new DeepSeekAdapter(), ima = new ImaA
       if (!['GET', 'HEAD'].includes(req.method) && req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) throw problem('不允许跨站请求。', 403);
       if (req.method === 'GET' && url.pathname === '/api/status') return json(res, 200, { ima: await ima.status(), model: model.status(), mode: 'local', version: '0.3.0', storage: 'SQLite', platforms });
       if (req.method === 'GET' && url.pathname === '/api/products') return json(res, 200, await products());
+      if (req.method === 'GET' && url.pathname === '/api/tags') return json(res, 200, getTagLibrary());
+      if (req.method === 'GET' && url.pathname === '/api/tags/recommend') {
+        const audience = url.searchParams.get('audience') || '';
+        if (audience.length > 80) throw problem('目标人群最多80字。');
+        const monthParam = url.searchParams.get('month');
+        try { return json(res, 200, recommendPresetTags({ audience, month: monthParam === null ? new Date().getMonth() + 1 : Number(monthParam) })); }
+        catch { throw problem('月份必须为1到12。'); }
+      }
+      if (req.method === 'POST' && url.pathname === '/api/topics') {
+        const input = await bodyOf(req), product = (await products()).find(item => item.id === input.productId);
+        if (!product || typeof input.audience !== 'string' || !input.audience.trim() || input.audience.length > 80) throw problem('请选择产品和目标人群后搜索热点。');
+        return json(res, 200, await topicSearch({ audience: input.audience.trim(), product: product.name,
+          classify: topics => model.classifyTopics(topics, { product: product.name, audience: input.audience.trim() }) }));
+      }
       if (req.method === 'GET' && url.pathname === '/api/showcase') {
         const source = await evidence(url.searchParams.get('productId'));
-        return json(res, 200, { product: source.product, images: source.images });
+        return json(res, 200, { product: source.product, images: source.images, officialImages: distinctOfficialImages(service().store.officialImages(source.product.id)) });
+      }
+      if (req.method === 'POST' && url.pathname === '/api/official-images') {
+        const input = await bodyOf(req), product = (await products()).find(item => item.id === input.productId);
+        if (!product) throw problem('请选择有效产品型号。');
+        const cached = service().store.officialImages(product.id).length > 0;
+        const images = await cacheOfficialProductImages(product, service().store, imageTransport);
+        return json(res, 200, { images, cached });
       }
       if (req.method === 'POST' && url.pathname === '/api/verify') {
         if (verifying) throw problem('连接验证正在进行。', 429);
@@ -74,6 +97,11 @@ export function createApp({ store, model = new DeepSeekAdapter(), ima = new ImaA
       const assetRoute = url.pathname.match(/^\/api\/assets\/([\da-f-]{36})$/i);
       if (req.method === 'GET' && assetRoute) {
         const asset = service().store.asset(assetRoute[1]); res.writeHead(200, { 'Content-Type': asset.type, 'Cache-Control': 'no-store' }); return res.end(asset.data);
+      }
+      const officialImageRoute = url.pathname.match(/^\/api\/official-image\/([\da-f]{32})$/i);
+      if (req.method === 'GET' && officialImageRoute) {
+        const asset = service().store.officialImage(officialImageRoute[1]);
+        res.writeHead(200, { 'Content-Type': asset.type, 'Cache-Control': 'public, max-age=31536000, immutable' }); return res.end(asset.data);
       }
       if (req.method !== 'GET') throw problem('不支持的请求方法。', 405);
       let filename;

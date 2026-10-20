@@ -1,5 +1,5 @@
 const panels = new Map([...document.querySelectorAll('[data-view]')].map(panel => [panel.dataset.view, panel]));
-const labels = { home: '首页', create: '创作', works: '作品', history: '历史' };
+const labels = { home: '首页', create: '创作', works: '作品', review: '审核', history: '历史' };
 const positions = new Map();
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
 const mobile = matchMedia('(max-width: 760px)');

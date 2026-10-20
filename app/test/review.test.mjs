@@ -22,7 +22,7 @@ test('images, empty content, dirty edits and failed image loads remain blocked',
   assert.equal(exportGate({ draft: empty, platform: 'moments' }).allowed, false);
   assert.deepEqual(contentOf(draft()), content);
 });
-test('review queue shows conflicts and web-only verified claims, but hides warnings and local or ima verified claims', () => {
+test('review queue shows only unsupported claims and excludes verified or conflicting claims', () => {
   const report = { claims: [
     { status: 'warning', statement: '没有来源', evidence: [] },
     { status: 'verified', statement: '文档支持', evidence: [{ kind: 'local' }] },
@@ -31,6 +31,6 @@ test('review queue shows conflicts and web-only verified claims, but hides warni
     { status: 'verified', statement: '网页和文档都支持', evidence: [{ kind: 'web' }, { kind: 'local' }] },
     { status: 'conflict', statement: '与资料冲突', evidence: [] },
   ] };
-  assert.deepEqual(reviewClaims(report).map(claim => claim.statement), ['只有网页支持', '与资料冲突']);
+  assert.deepEqual(reviewClaims(report).map(claim => claim.statement), ['没有来源']);
   assert.equal(report.claims.length, 6, 'display filtering must not mutate the persisted full report');
 });

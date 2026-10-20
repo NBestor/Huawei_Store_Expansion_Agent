@@ -89,6 +89,7 @@ export async function renderPlanPdf(session, images, exportedAt) {
   paragraph([draft.strategy?.angle, draft.strategy?.tone].filter(Boolean).join('\n'));
   heading('资料与接入方式');
   paragraph(task.mode === 'ima' ? '本地赛事 P1 文档 + ima 共享知识库；ima 原文和图片通过官方 OpenAPI 获取。' : '本次使用本地赛事参考资料，未调用 ima。工作台另提供 ima OpenAPI 接入；因访问次数有限，日常测试推荐本地模式。');
+  if (draft.imageSelection) paragraph(`配图来源：${draft.imageSelection.summary}；官网 ${draft.imageSelection.officialCount} 张，已有素材 ${draft.imageSelection.fallbackCount} 张。`);
   const docs = draft.evidence?.documents || [];
   for (const doc of docs) {
     ensure(65); paragraph(({ local: '本地文档', ima: 'ima 知识库', web: '华为商城网页' }[doc.kind] || '资料') + (doc.fetchedAt ? ` · ${doc.fetchedAt}` : ''), 9, '#70766d');
@@ -96,10 +97,11 @@ export async function renderPlanPdf(session, images, exportedAt) {
   }
   const queue = reviewClaims(draft.verification);
   if (queue.length) {
-    heading('仅由商城网页支持的表述');
+    heading('待人工确认的表述');
     for (const claim of queue) {
       ensure(70); paragraph(claim.statement, 11, '#303438', { bold: true }); paragraph(claim.explanation, 10);
-      for (const cite of claim.evidence) { paragraph(`原文：${cite.quote}`, 9, '#70766d'); link(cite.path); }
+      if (!claim.evidence?.length) paragraph('没有找到可引用的相关依据。', 9, '#70766d');
+      for (const cite of claim.evidence || []) { paragraph(`相关原文：${cite.quote}`, 9, '#70766d'); link(cite.path); }
     }
   }
   paragraph('核验与引用的完整快照保存在工作台历史会话中。图片按型号目录匹配，未进行视觉语义核验。', 9, '#70766d');
@@ -108,7 +110,7 @@ export async function renderPlanPdf(session, images, exportedAt) {
   for (let i = 0; i < pages.length; i++) {
     const item = pages[i];
     item.svg.push('<path d="M44 798H551" stroke="#e0e3dc"/>', `<text x="44" y="817" font-size="8" fill="#8d9389">PC STUDIO · 华为 PC 图文方案</text><text x="551" y="817" font-size="8" fill="#8d9389" text-anchor="end">${i + 1} / ${pages.length}</text>`);
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, WenQuanYi Micro Hei, sans-serif">${item.svg.join('')}</svg>`;
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" font-family="Noto Sans SC, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, WenQuanYi Micro Hei, sans-serif">${item.svg.join('')}</svg>`;
     const png = await sharp(Buffer.from(svg), { density: 180 }).png().toBuffer();
     const background = await pdf.embedPng(png), output = pdf.addPage([width, height]);
     output.drawImage(background, { x: 0, y: 0, width, height });
