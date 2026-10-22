@@ -231,8 +231,12 @@ async function loadTopics() {
         for (const button of el('topic-options').querySelectorAll('.topic-choice')) button.setAttribute('aria-pressed', String(button === choose));
         el('topic-status').textContent = `已选择热点 · ${new Date(topic.publishedAt).toLocaleDateString()}`; updateGenerateButton();
       });
-      const source = text('a', new URL(topic.url).hostname); source.href = topic.url; source.target = '_blank'; source.rel = 'noopener noreferrer';
-      item.append(choose, source); return item;
+      item.append(choose);
+      if (typeof topic.url === 'string' && /^https:\/\//i.test(topic.url)) {
+        const source = text('a', new URL(topic.url).hostname); source.href = topic.url; source.target = '_blank'; source.rel = 'noopener noreferrer';
+        item.append(source);
+      }
+      return item;
     }));
   } catch (error) {
     const message = /后台任务|查询任务|查询任务结果/.test(error.message) ? '热点搜索连接中断或等待超时。' : error.message;
