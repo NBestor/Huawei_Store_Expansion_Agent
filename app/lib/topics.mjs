@@ -57,8 +57,13 @@ function readItems(xml, now) {
   }).filter(Boolean);
 }
 
-export async function searchTopics({ audience, product, classify, transport = fetch, now = Date.now }) {
+export async function searchTopics({ audience, product, classify, generate, transport = fetch, now = Date.now }) {
   if (typeof audience !== 'string' || !audience.trim() || audience.length > 80 || typeof product !== 'string' || !product.trim() || product.length > 120) throw failure('热点搜索需要有效的人群和产品。');
+  if (typeof generate === 'function') {
+    const topics = await generate();
+    if (Array.isArray(topics) && topics.length) return { query: audience.trim(), provider: 'deepseek-model', candidateCount: topics.length, searchedAt: new Date(now()).toISOString(), topics: topics.slice(0, 5) };
+    throw failure('热点生成暂不可用，请稍后重试。');
+  }
   if (typeof classify !== 'function') throw failure('热点搜索缺少AI相关性筛选配置。');
   const queries = buildQueries(audience.trim()), query = queries.join('；');
   let available = false, lastProvider = '', candidateCount = 0;

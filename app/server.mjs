@@ -57,7 +57,8 @@ export function createApp({ store, model = new DeepSeekAdapter(), ima = new ImaA
         const input = await bodyOf(req), product = (await products()).find(item => item.id === input.productId);
         if (!product || typeof input.audience !== 'string' || !input.audience.trim() || input.audience.length > 80) throw problem('请选择产品和目标人群后搜索热点。');
         return json(res, 200, await topicSearch({ audience: input.audience.trim(), product: product.name,
-          classify: topics => model.classifyTopics(topics, { product: product.name, audience: input.audience.trim() }) }));
+          classify: topics => model.classifyTopics(topics, { product: product.name, audience: input.audience.trim() }),
+          generate: () => model.recommendTopics({ audience: input.audience.trim(), product: product.name }) }));
       }
       if (req.method === 'GET' && url.pathname === '/api/showcase') {
         const source = await evidence(url.searchParams.get('productId'));

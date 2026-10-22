@@ -31,6 +31,28 @@ export class DeepSeekAdapter {
     }
     return topics.map((_, index) => selected.get(index)).filter(Boolean).slice(0, 5);
   }
+  async recommendTopics({ audience, product }) {
+    const result = await this.json('你是华为PC内容选题编辑。根据当前日期、目标人群和产品，给出3~5个适合该人群当前阶段的营销切入点（如开学季、国补、旅游热、AI应用、双11、毕业季等）。每个给一个简短标签和一句面向顾客的销售切入角度：借话题吸引力带出电脑亮点与购买兴趣，不写新闻科普、选购教程、政策核对，不暗示未经核实的优惠或产品能力。只输出 {"topics":[{"title":"热点标题","summary":"一句话说明","tag":"标签","angle":"面向顾客的销售切入角度"}]}。', {
+      audience, product, currentDate: new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' }),
+    });
+    if (!Array.isArray(result?.topics)) throw failure('热点生成未返回有效结果，请重试。');
+    const seen = new Set();
+    return result.topics.filter(item => {
+      const title = typeof item?.title === 'string' ? item.title.trim().slice(0, 240) : '';
+      const tag = typeof item?.tag === 'string' ? item.tag.trim().slice(0, 16) : '';
+      const angle = typeof item?.angle === 'string' ? item.angle.trim().slice(0, 120) : '';
+      if (!title || !tag || !angle || seen.has(title)) return false;
+      seen.add(title); return true;
+    }).slice(0, 5).map(item => ({
+      title: item.title.trim().slice(0, 240),
+      summary: typeof item.summary === 'string' ? item.summary.trim().slice(0, 360) : '',
+      url: '',
+      publishedAt: new Date().toISOString(),
+      tag: item.tag.trim().slice(0, 16),
+      angle: item.angle.trim().slice(0, 120),
+    }));
+  }
+
   base() {
     const url = (this.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com').replace(/\/$/, '');
     if (!['https://api.deepseek.com', 'https://api.deepseek.com/v1'].includes(url)) throw failure('DeepSeek 地址须为官方 HTTPS 接口，防止误传凭证。');
