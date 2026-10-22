@@ -9,6 +9,11 @@ ima-skills-*.zip
 华为PC知识库/
 华为·产业进阶赛道·赛题手册v4.pdf
 _deploy*.tar.gz
+_redeploy*.py
+_redeploy*.tar.gz
+_*.py
+_*.tar.gz
+_*.mjs
 Agent协同与任务梳理/
 .pnpm-store/
 视频演示/
