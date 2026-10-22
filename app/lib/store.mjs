@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { failure } from './config.mjs';
+import { reviewedOfficialImage } from './official-photo-index.mjs';
 
 export const databasePath = fileURLToPath(new URL('../.runtime/studio.sqlite', import.meta.url));
 export function problem(message, status = 400) { return Object.assign(failure(message), { status }); }
@@ -109,8 +110,13 @@ export class HistoryStore {
       ON CONFLICT(product_id,source_url) DO NOTHING`)
       .run(image.id, image.productId, image.sourceUrl, image.sourcePage, image.name, image.description, image.type, image.data, image.cachedAt || new Date().toISOString());
   }
+  removeOfficialImages(sourceUrls) {
+    if (!Array.isArray(sourceUrls) || !sourceUrls.length) return 0;
+    const remove = this.db.prepare('DELETE FROM official_images WHERE source_url=?');
+    return this.transaction(() => sourceUrls.reduce((count, sourceUrl) => count + remove.run(sourceUrl).changes, 0));
+  }
   officialImages(productId) {
-    return this.db.prepare('SELECT id,product_id AS productId,source_url AS sourceUrl,source_page AS sourcePage,name,description,type,cached_at AS cachedAt FROM official_images WHERE product_id=? ORDER BY cached_at DESC,id LIMIT 24').all(productId).map(image => ({ ...image, url: `/api/official-image/${image.id}` }));
+    return this.db.prepare('SELECT id,product_id AS productId,source_url AS sourceUrl,source_page AS sourcePage,name,description,type,cached_at AS cachedAt FROM official_images WHERE product_id=? ORDER BY cached_at DESC,id LIMIT 96').all(productId).map(image => reviewedOfficialImage({ ...image, url: `/api/official-image/${image.id}` })).filter(image => image.autoEligible !== false);
   }
   officialImage(id) {
     const image = this.db.prepare('SELECT * FROM official_images WHERE id=?').get(id);

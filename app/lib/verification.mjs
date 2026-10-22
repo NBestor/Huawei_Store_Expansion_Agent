@@ -15,19 +15,51 @@ export function sourceChunks(evidence) {
   const text = evidence.facts || '';
   return Array.from({ length: Math.ceil(text.length / 4000) }, (_, i) => ({ id: `S${i + 1}`, path: evidence.factPath, kind: evidence.sourceMode || 'local', text: text.slice(i * 4000, (i + 1) * 4000) }));
 }
+
+// These are editorial controls, not product claims. Models occasionally return
+// them as warnings even though they cannot be verified against a product source.
+const invitationPattern = /(?:欢迎|可|可以|建议|不妨|来|到店|进店|私信|留言|咨询|了解|体验|预约|联系|官网|门店|店里|亲手|扫码|点击|关注|选购|购买)/;
+const factualMarker = /(?:\d+(?:\.\d+)?\s*(?:英寸|英尺|克|千克|公斤|小时|瓦时|Wh|W|Hz|GB|TB|毫米|mm|%|核|线程|万像素)|支持|搭载|配备|采用|提供|内置|接口|屏幕|续航|电池|处理器|显卡|内存|硬盘|系统|分辨率|刷新率|重量|厚度|型号|版本|售价|价格|优惠|补贴|国补|活动|限时|现货|赠品)/i;
+const ctaFactPattern = /(?:售价|价格|优惠|补贴|国补|活动|限时|现货|赠品|免费|服务承诺|门店地址|发票|保修)/;
+const rhetoricalPattern = /(?:很懂|更从容|值得(?:放进|加入|列入)|戳中|心动|种草|宝藏|解锁|陪你|为你|适合(?:校园|通勤|随行)|一台新电脑|新装备|心愿单|更轻松|更自在|更高效)/;
+
+/** Return true when a model claim is clearly copy guidance rather than a fact. */
+export function isNonProductClaim(claim) {
+  if (!claim || typeof claim !== 'object') return false;
+  if (claim.field === 'tags') return true;
+  const statement = String(claim.statement || '').trim();
+  if (!statement) return true;
+  // A CTA may mention a screen, interface or other product object as the
+  // thing customers can experience; that still is an invitation, not a claim
+  // that the source must prove. Keep only explicit offer/service assertions.
+  if (claim.field === 'cta' && invitationPattern.test(statement) && !ctaFactPattern.test(statement)) return true;
+  if ((claim.field === 'title' || claim.field === 'body') && rhetoricalPattern.test(statement) && !factualMarker.test(statement)) return true;
+  return false;
+}
 export function normalizeVerification(value, draft, chunks, engine, ecosystem) {
   if (!value || !Array.isArray(value.claims) || value.claims.length > 100 || typeof value.summary !== 'string') throw failure('事实核验响应格式无效，请重新核验。');
-  const claims = value.claims.map((claim, index) => {
+  const claims = value.claims.filter(claim => !isNonProductClaim(claim)).map((claim, index) => {
     if (!claim || !fields.includes(claim.field) || typeof claim.statement !== 'string' || !claim.statement.trim() || !draft[claim.field].includes(claim.statement) || !['verified', 'warning', 'conflict'].includes(claim.status) || typeof claim.explanation !== 'string' || !Array.isArray(claim.evidence)) throw failure('事实核验中的表述或状态无效，请重新核验。');
     const evidence = claim.evidence.slice(0, 8).flatMap(cite => {
       const chunk = chunks.find(item => item.id === cite?.sourceId);
       return chunk && typeof cite.quote === 'string' && cite.quote.trim().length >= 6 && chunk.text.includes(cite.quote) ? [{ sourceId: chunk.id, path: chunk.path || '', kind: chunk.kind || 'local', quote: cite.quote }] : [];
     });
-    const wrongEcosystem = ecosystem !== undefined && claim.status === 'verified' && collaborationPattern.test(claim.statement) && (!ecosystem?.card || !ecosystem.card.sentence.includes(claim.statement) || !ecosystem.card.evidence.every(approved => evidence.some(cite => cite.path === approved.path && cite.quote.includes(approved.quote)))) ;
-    const missing = claim.status !== 'warning' && evidence.length === 0 || wrongEcosystem;
+    // If the complete statement is present in an approved source, the model's
+    // warning is only an omitted citation. Recover that citation deterministically.
+    let resolvedEvidence = evidence;
+    let resolvedStatus = claim.status;
+    if (resolvedStatus === 'warning' && !resolvedEvidence.length) {
+      const exact = chunks.find(chunk => chunk.text.includes(claim.statement));
+      if (exact && claim.statement.trim().length >= 6) {
+        resolvedEvidence = [{ sourceId: exact.id, path: exact.path || '', kind: exact.kind || 'local', quote: claim.statement }];
+        resolvedStatus = 'verified';
+      }
+    }
+    const wrongEcosystem = ecosystem !== undefined && resolvedStatus === 'verified' && collaborationPattern.test(claim.statement) && (!ecosystem?.card || !ecosystem.card.sentence.includes(claim.statement) || !ecosystem.card.evidence.every(approved => resolvedEvidence.some(cite => cite.path === approved.path && cite.quote.includes(approved.quote)))) ;
+    const missing = resolvedStatus !== 'warning' && resolvedEvidence.length === 0 || wrongEcosystem;
     return { id: `C${index + 1}`, field: claim.field, statement: claim.statement,
-      status: missing ? 'warning' : claim.status, evidence,
-      explanation: wrongEcosystem ? '协同表述没有引用通过当前PC配对核验的官网证据，不能视为已证实。' : missing ? '核验未提供可逐字溯源的证据，降级为待确认；不视为已证实的错误。' : claim.explanation };
+      status: missing ? 'warning' : resolvedStatus, evidence: resolvedEvidence,
+      explanation: wrongEcosystem ? '协同表述没有引用通过当前PC配对核验的官网证据，不能视为已证实。' : missing ? '核验未提供可逐字溯源的证据，降级为待确认；不视为已证实的错误。' : resolvedStatus === 'verified' && claim.status === 'warning' ? '原文逐字支持，已补齐引用。' : claim.explanation };
   });
   if (!claims.length) claims.push({ id: 'C1', field: 'body', statement: draft.body.slice(0, 160), status: 'warning', explanation: '核验没有返回可评估的产品主张，请自行核对。', evidence: [] });
   const counts = { verified: 0, warning: 0, conflict: 0 }; claims.forEach(claim => counts[claim.status]++);

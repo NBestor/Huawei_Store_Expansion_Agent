@@ -17,9 +17,9 @@ export class DeepSeekAdapter {
   constructor(env = process.env, transport = fetch) { this.env = env; this.transport = transport; this.verified = false; this.message = '尚未验证连接'; }
   status() { return { configured: Boolean(this.env.DEEPSEEK_API_KEY && this.env.DEEPSEEK_MODEL), model: this.env.DEEPSEEK_MODEL || '', verified: this.verified, message: this.message }; }
   async classifyTopics(topics, { product, audience }) {
-    const result = await this.json('你是华为PC内容选题编辑。逐条判断新闻是否能自然转化为面向指定人群的华为PC创作素材。检索词只是模糊标签，不是保留条件。只保留能形成具体学习、办公、创作、出行或数字生活场景的新闻；泛天气、泛社会新闻、与电脑使用无关的内容应排除。不要为了保留而牵强关联，也不要把新闻内容当作产品事实。每条入选项给一个简短素材标签（如国补、开学季、效率工具、AI应用、家庭消费）和一句面向顾客推荐当前电脑的销售切入角度：借话题吸引力带出电脑亮点与购买兴趣，不写新闻科普、准备清单、选购或政策核对指南；不得暗示未经核实的优惠与产品能力。只输出 {"topics":[{"index":0,"relevant":true,"tag":"学习效率","angle":"借开学期待推荐本款电脑，用已核实的学习相关亮点打动新生"}]}。', {
+    const result = await this.json('你是华为PC内容选题编辑。逐条判断新闻是否能自然转化为面向指定人群的华为PC创作素材。检索词只是模糊标签，不是保留条件。只保留能形成具体学习、办公、创作、出行或数字生活场景的新闻；泛天气、泛社会新闻、博彩或疑似SEO垃圾、与电脑使用无关的内容应排除。仅出现华为、鸿蒙或校园字样的音乐节、手机服务等新闻不能据此保留，必须有具体的电脑使用或购机动机；不得推断当前型号搭载鸿蒙或具备未提供的功能。不要为了保留而牵强关联，也不要把新闻内容当作产品事实。每条入选项给一个简短素材标签（如国补、开学季、效率工具、AI应用、家庭消费）和一句面向顾客推荐当前电脑的销售切入角度：借话题吸引力带出电脑亮点与购买兴趣，不写新闻科普、准备清单、选购或政策核对指南；不得暗示未经核实的优惠与产品能力。只输出 {"topics":[{"index":0,"relevant":true,"tag":"学习效率","angle":"借开学期待推荐本款电脑，用已核实的学习相关亮点打动新生"}]}。', {
       product, audience, currentDate: new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' }), angleBoundary: '本轮只有新闻资料，没有产品参数。角度只能描述推介动机与人群场景，不得宣称已核实续航、护眼、性能、AI或协同功能；具体卖点留给后续P1规划。', candidates: topics.map(({ title, summary }, index) => ({ index, title, summary })),
-    });
+    }, { timeoutMs: 18000 });
     if (!Array.isArray(result?.topics)) throw failure('热点相关性筛选未返回有效结果，请重试。');
     const selected = new Map();
     for (const item of result.topics) {
@@ -141,8 +141,12 @@ export class DeepSeekAdapter {
       currentDate: new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' }), temporalGuidance: '按当前日期写作。校园学习是全年场景，不代表开学将至；只有日期和实际时机相符才写马上开学、假期将至等时间判断。按所选标签推介电脑，不把节日或国补话题丢弃；无热点时效来源不得宣称近期热议、当前正热；无优惠证据只借话题邀请了解，不能暗示本机可享优惠。',
       voiceCtaExample: voice.cta, publicationIdentity: salesIdentity, salesAngleGuidance, factualStyle: '卖点要有吸引力但不做体验保证：不能从电池容量推断少充电或一天续航，不能从触控推断圈画批注无需软件支持，不能从分辨率或护眼模式推断眼睛轻松、不累眼，不承诺所有外设直连或无需转接。每节围绕一个主亮点，少列配置分支；不相关的存储格式化、全套协议、所有可选容量直接省略，不要靠解释这些细节凑字。已核实的条件简短就近保留，不把全文写成对配置或到店核对指南。不要机械复制CTA示例，结尾与本篇亮点呼应且仅放在cta字段。',
       angleContract: angleContract(task), ecosystem, ecosystemPolicy: 'points只挑电脑亮点，不把协同选为电脑points。生态内容只受ecosystem授权：status不是supported则不写任何协同；supported时最多一句原样采用card.sentence，不改写或拆分批准句，不新增协同标题。', lengthGuidance: editorialGuidance(task.platform), sources: writerSources(chunks, ecosystem) };
-    const plan = await this.json(`你是华为PC资料分析员，为销售工作人员面向顾客的宣传成稿准备事实边界。按平台优先选择至多${editorialProfiles[task.platform].points}个与人群和场景相关、彼此不同、值得推荐的电脑客观亮点，每个输出statement、sourceId、quote。statement只写该亮点和必要的适用条件，不写选购建议、政策教程、写作指令或审核流程；quote必须是对应原文至少6字逐字摘录。保留型号、数字和限定条件；缺资料不选。按所选标签的销售动机挑选能打动顾客的本机亮点，不把流程建议当卖点。国补与促销标签本身不是优惠依据，不能选作points；若提供的官方原文明示当前本机适用的优惠及必要地区、时间、渠道与资格条件，可另选一条附完整适用条件的购机权益事实；没有适用官方优惠证据时不写本机能补贴、便宜或节省金额。遵守salesAngleGuidance组织推荐所需依据，事实不随销售角度改变。生态配角由独立ecosystem流程提供，points只挑电脑亮点，绝不将协同凑为电脑卖点。标签仅提供切入角度，不构成事实。只输出 {"points":[{"statement":"","sourceId":"S1","quote":""}]}。`, context);
-    const points = Array.isArray(plan?.points) ? plan.points.filter(point => typeof point?.statement === 'string' && point.statement.trim() && !collaborationPattern.test(point.statement) && typeof point?.quote === 'string' && point.quote.trim().length >= 6 && chunks.some(chunk => chunk.id === point.sourceId && chunk.kind !== 'ecosystem-web' && chunk.text.includes(point.quote))).slice(0, editorialProfiles[task.platform].points) : [];
+    const planInstruction = `你是华为PC资料分析员，为销售工作人员面向顾客的宣传成稿准备事实边界。按平台优先选择至多${editorialProfiles[task.platform].points}个与人群和场景相关、彼此不同、值得推荐的电脑客观亮点，每个输出statement、sourceId、quote。statement只写该亮点和必要的适用条件，不写选购建议、政策教程、写作指令或审核流程；quote必须是对应原文至少6字逐字摘录。保留型号、数字和限定条件；缺资料不选。按所选标签的销售动机挑选能打动顾客的本机亮点，不把流程建议当卖点。国补与促销标签本身不是优惠依据，不能选作points；若提供的官方原文明示当前本机适用的优惠及必要地区、时间、渠道与资格条件，可另选一条附完整适用条件的购机权益事实；没有适用官方优惠证据时不写本机能补贴、便宜或节省金额。遵守salesAngleGuidance组织推荐所需依据，事实不随销售角度改变。生态配角由独立ecosystem流程提供，points只挑电脑亮点，绝不将协同凑为电脑卖点。标签仅提供切入角度，不构成事实。只输出 {"points":[{"statement":"","sourceId":"S1","quote":""}]}。`;
+    let plan, points = [];
+    for (let attempt = 0; attempt < 2 && !points.length; attempt++) {
+      plan = await this.json(attempt ? `${planInstruction}上一轮没有通过逐字引用校验。请只从给定sources复制连续quote，sourceId必须存在；宁可少选，也不要改写quote。` : planInstruction, context);
+      points = Array.isArray(plan?.points) ? plan.points.filter(point => typeof point?.statement === 'string' && point.statement.trim() && !collaborationPattern.test(point.statement) && typeof point?.quote === 'string' && point.quote.trim().length >= 6 && chunks.some(chunk => chunk.id === point.sourceId && chunk.kind !== 'ecosystem-web' && chunk.text.includes(point.quote))).slice(0, editorialProfiles[task.platform].points) : [];
+    }
     if (!points.length) throw failure('卖点规划未通过逐字引用校验，请重试。');
     const instruction = salesIdentity + salesAngleGuidance + '按平台风格和voiceGuidance输出能直接发布的销售文案：第一段即推荐这款电脑，严格按lengthGuidance中的平台篇幅、分节和段落要求展开完整成稿，正文以有依据的亮点带出顾客关心的价值。公众号不能只写几段摘要，小红书不能只列几个短句，每节要有具体场景、亮点及推荐理由，结尾邀请私信咨询或到店体验。不使用“先列需求、再核对版本、最后作选择”的教学结构，不写配置核对清单，不用SKU、P1等内部术语。不要照抄creativeTag.angle、guardrails、内部策略或指令性措辞到正文；angle字段才用于记录内部策略。points提供事实边界，允许自然改写，保持数字、功能、适用版本与条件准确；不要把分析员的说明原封不动塞进正文。不新增无依据的能力、价格、续航结论、协同兼容、个人体验或门店活动。标签和热点只提供切入时机，不构成产品事实。所选角度要自然带出为什么现在值得了解和购买本机，开场、亮点与收束相互呼应；所选国补或促销角度按salesAngleGuidance处理，既不变成政策科普，也不在没有适用依据时暗示本机优惠。必要功能条件简短就近保留，不把整篇写成风险提示。严格遵守ecosystemPolicy：ecosystem.status不是supported则不写任何协同；supported时只可原样使用ecosystem.card.sentence一句，保留具体配角型号和必要条件，不另起协同小标题。CTA呼应本篇推荐，友善邀请进一步沟通，不把查资料的任务交回顾客。输出 {"title":"","body":"","cta":"","tags":"","angle":"内部场景策略"}。';
     let revisionCount = 0;
@@ -161,7 +165,10 @@ export class DeepSeekAdapter {
           if (!angle.approved) copyIssues.push(angle.reason || '切入角度未与电脑推荐形成联系，请重写。');
         }
         if (!copyIssues.length && length.status === 'within-target') return candidate;
-        if (repair >= 1 && (copyIssues.length || length.status !== 'above-target' || repair === 2)) {
+        // Angle and copy reviews are model judgments and can be overly strict
+        // on one pass. Allow two corrective rewrites before failing closed.
+        const exhausted = copyIssues.length ? repair >= 2 : repair >= 1;
+        if (exhausted && (copyIssues.length || length.status !== 'above-target' || repair === 2)) {
           if (copyIssues.length) throw failure(`文案未通过销售角度与证据检查，未作为成稿保存：${copyIssues.join('；')}`);
           return candidate; // Evidence takes precedence; expose unmet editorial targets instead of padding.
         }
@@ -182,7 +189,10 @@ export class DeepSeekAdapter {
       const unsupported = verification.claims.filter(claim => claim.field === 'body' && claim.status === 'warning');
       const corrections = verification.claims.filter(claim => claim.status === 'conflict').concat(unsupported);
       if (!corrections.length || attempt === 2) break;
-      draft = await this.json(instruction, { ...context, points, previousDraft: draft, requiredCorrections: corrections, correctionGuidance: '逐条删除无依据的体验、护眼、续航、兼容等效果，不允许只换同义词保留原承诺；可以换成已被原文支持的客观卖点。缺少具体生态型号与当前PC配对依据就省略协同，不用泛协同凑段；证据充分也仅一句。保留所选标签、销售推荐方向和lengthGuidance要求的完整篇幅、分节与场景展开，不要把全文缩成参数摘要，不要改成选购指南或政策核对清单。' }); revisionCount++;
+      const editorialCorrection = editorialReport(task.platform, draft);
+      draft = await this.json(instruction, { ...context, points, previousDraft: draft, requiredCorrections: corrections,
+        ...(editorialCorrection.status === 'below-target' && !corrections.some(claim => claim.status === 'conflict') ? { requiredEditorialCorrections: { ...editorialCorrection, instruction: '正文低于平台下限。删除无依据效果后，补回具体日常场景、已核实亮点和推荐理由，直到达到建议篇幅；不得新增未经支持的产品事实。' } } : {}),
+        correctionGuidance: '逐条删除无依据的体验、护眼、续航、兼容等效果，不允许只换同义词保留原承诺；可以换成已被原文支持的客观卖点。缺少具体生态型号与当前PC配对依据就省略协同，不用泛协同凑段；证据充分也仅一句。保留所选标签、销售推荐方向和lengthGuidance要求的完整篇幅、分节与场景展开，不要把全文缩成参数摘要，不要改成选购指南或政策核对清单。' }); revisionCount++;
     }
     const result = finalize(task, source, draft, verification, points, revisionCount);
     result.points = points;

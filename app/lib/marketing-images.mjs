@@ -1,7 +1,9 @@
 import { platforms } from './workflow.mjs';
 import { distinctOfficialImages } from './knowledge.mjs';
+import { reviewedOfficialImage } from './official-photo-index.mjs';
 
 function imageKind(image) {
+  if (image.reviewedKind) return image.reviewedKind;
   const text = `${image.sourceUrl || ''} ${image.description || ''}`;
   const filename = (image.sourceUrl || '').split('/').pop();
   if (/[-_](?:kv[0-9]*|hero|key-vision)(?:[_.-])|^(?:kv|hero)[.]/i.test(filename) || /主视觉/.test(image.description || '')) return 'hero';
@@ -25,7 +27,8 @@ export function chooseOfficialImages(images, task) {
     if (task.ecosystemDevices?.length && kind === 'ecosystem') value += 35;
     return value;
   };
-  const sorted = distinctOfficialImages(images).sort((a, b) => score(b) - score(a)), picked = [], usedKinds = new Set();
+  const reviewed = images.map(image => reviewedOfficialImage(image, task.productId)).filter(image => image.autoEligible !== false);
+  const sorted = distinctOfficialImages(reviewed).sort((a, b) => score(b) - score(a)), picked = [], usedKinds = new Set();
   for (const image of sorted) {
     if (usedKinds.has(imageKind(image))) continue;
     picked.push(image); usedKinds.add(imageKind(image));
@@ -33,5 +36,5 @@ export function chooseOfficialImages(images, task) {
   }
   for (const image of sorted) if (picked.length < desired && !picked.includes(image)) picked.push(image);
   const labels = { hero: '官方产品主视觉', color: '官方配色外观', screen: '官方屏幕展示', keyboard: '官方键盘展示', design: '官方机身设计', ecosystem: '官方互联场景展示', scene: '官方使用场景', feature: '官方产品展示' };
-  return picked.map(image => ({ ...image, description: `${labels[imageKind(image)]} · ${image.description}` }));
+  return picked.map(image => ({ ...image, description: image.reviewedDescription ? `画面已核对：${image.reviewedDescription}` : `${labels[imageKind(image)]} · ${image.description}` }));
 }

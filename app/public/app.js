@@ -157,6 +157,8 @@ function resetTopics(message = '热点可选：选好产品和人群后，点击
   el('topic-options').replaceChildren();
   el('topic-status').textContent = message;
   el('find-topics').disabled = false;
+  el('find-topics').textContent = '为我推荐';
+  el('topic-options').removeAttribute('aria-busy');
   updateGenerateButton();
 }
 function selectAudience(value) {
@@ -206,17 +208,20 @@ async function loadRecommendedTags() {
   }
 }
 async function loadTopics() {
+  if (topicLoading) return;
   const requestId = ++topicRequest, productId = el('product').value, audience = el('audience').value;
   if (!productId || !audience) { el('topic-status').textContent = '请先选择产品和人群，再点击“为我推荐”。'; el('find-topics').disabled = false; return; }
   topicLoading = true; el('selected-topic').value = 'skip'; el('generate').disabled = true;
   el('topic-options').replaceChildren(); el('find-topics').disabled = true;
-  el('topic-status').textContent = '正在按人群和场景标签搜索热点，不限时间，新内容优先…';
+  el('find-topics').textContent = '正在搜索…';
+  el('topic-options').setAttribute('aria-busy', 'true');
+  el('topic-status').textContent = '已开始联网搜索：按人群分组检索并由 AI 筛选，通常需要 10–30 秒。不限时间，新内容优先。';
   try {
-    const data = await post('/api/topics', { productId, audience });
+    const data = await request('/api/topics', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ productId, audience }), signal: AbortSignal.timeout(70000) });
     if (requestId !== topicRequest) return;
     el('topic-status').textContent = data.topics.length
       ? `AI筛选出 ${data.topics.length} 条可用素材 · 搜索于 ${new Date(data.searchedAt).toLocaleString()}`
-      : '未筛选到适合当前产品和人群的素材（搜索不限时间）。可重试，也可直接生成文案。';
+      : `搜索已完成，${data.candidateCount ? `已筛选 ${data.candidateCount} 条候选，` : ''}暂未找到适合当前人群的电脑推广热点。可重试或继续使用预制标签。`;
     el('topic-options').replaceChildren(...data.topics.map(topic => {
       const item = text('article', '', 'topic-item'), choose = text('button', '', 'topic-choice'); choose.type = 'button';
       choose.append(text('span', topic.tag, 'topic-tag'), text('strong', topic.title), text('span', topic.summary), text('span', `创作角度：${topic.angle}`, 'topic-angle'), text('span', `发布时间：${topic.publishedAt ? new Date(topic.publishedAt).toLocaleString() : '未注明'}`, 'topic-date'));
@@ -230,8 +235,9 @@ async function loadTopics() {
       item.append(choose, source); return item;
     }));
   } catch (error) {
-    if (requestId === topicRequest) el('topic-status').textContent = `${error.message} 可重试，或选择“不结合热点”。`;
-  } finally { if (requestId === topicRequest) { topicLoading = false; el('find-topics').disabled = false; updateGenerateButton(); } }
+    const message = /后台任务|查询任务|查询任务结果/.test(error.message) ? '热点搜索连接中断或等待超时。' : error.message;
+    if (requestId === topicRequest) el('topic-status').textContent = `${message} 可重试，或选择“不结合热点”。`;
+  } finally { if (requestId === topicRequest) { topicLoading = false; el('find-topics').textContent = '为我推荐'; el('topic-options').removeAttribute('aria-busy'); updateGenerateButton(); } }
 }
 document.querySelectorAll('[data-audience]').forEach(button => button.addEventListener('click', () => selectAudience(button.dataset.audience)));
 el('find-topics').addEventListener('click', loadTopics);

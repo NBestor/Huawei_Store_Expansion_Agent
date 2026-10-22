@@ -47,6 +47,23 @@ test('short articles expand before review and factual rewrites are measured and 
   assert.equal(result.audit.revisionCount, 3);
 });
 
+test('seller point planning retries once when the model returns non-verbatim quotes', async () => {
+  const model = new DeepSeekAdapter({ DEEPSEEK_MODEL: 'test' });
+  let plans = 0;
+  model.json = async system => {
+    if (system.includes('资料分析员')) {
+      plans++;
+      return plans === 1 ? { points: [{ statement: '触控', sourceId: 'S1', quote: '模型改写的引用' }] } : { points: [point] };
+    }
+    if (system.includes('独立事实核验员')) return review('verified');
+    if (system.includes('独立销售角度')) return { approved: true };
+    return makeDraft(longBody);
+  };
+  const result = await model.generate(task, source);
+  assert.equal(plans, 2);
+  assert.equal(result.points[0].quote, fact);
+});
+
 test('unmet targets remain explicit while factual conflicts still block export', async () => {
   const model = new DeepSeekAdapter({ DEEPSEEK_MODEL: 'test' }); let writes = 0;
   model.json = async system => {

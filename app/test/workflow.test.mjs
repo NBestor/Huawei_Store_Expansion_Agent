@@ -45,11 +45,13 @@ test('topic search uses audience labels, keeps older HTTPS results and prioritiz
     <item><title>旧热点</title><link>https://news.example/b</link><description>旧摘要</description><pubDate>Mon, 01 Jun 2026 10:00:00 GMT</pubDate></item>
     <item><title>不安全链接</title><link>http://news.example/c</link><description>摘要</description><pubDate>Mon, 19 Oct 2026 10:00:00 GMT</pubDate></item>
     <item><title>无时间</title><link>https://news.example/d</link><description>摘要</description></item>
+    <item><title>亚愽app官网安装鸿蒙智慧校园</title><link>https://news.example/spam</link><description>推广垃圾</description><pubDate>Mon, 19 Oct 2026 10:00:00 GMT</pubDate></item>
   </channel></rss>`;
-  let requested;
-  const result = await searchTopics({ audience: '大学新生', product: 'MateBook', now: () => now, classify: async topics => topics.map((topic, index) => ({ ...topic, tag: '学习效率', angle: `创作切入 ${index}` })), transport: async (url, options) => { requested = new URL(url); assert.equal(options.redirect, 'follow'); return { ok: true, text: async () => xml }; } });
-  assert.match(requested.searchParams.get('q'), /大学新生/);
-  assert.match(requested.searchParams.get('q'), /开学季/);
+  const requested = [];
+  const result = await searchTopics({ audience: '大学新生', product: 'MateBook', now: () => now, classify: async topics => topics.map((topic, index) => ({ ...topic, tag: '学习效率', angle: `创作切入 ${index}` })), transport: async (url, options) => { requested.push(new URL(url).searchParams.get('q')); assert.equal(options.redirect, 'follow'); return { ok: true, text: async () => xml }; } });
+  assert.equal(requested.length, 3);
+  assert.ok(requested.some(query => /大学新生/.test(query) && /国补/.test(query)));
+  assert.ok(requested.some(query => /开学季/.test(query) && /电脑/.test(query)));
   assert.deepEqual(result.topics.map(topic => topic.title), ['新鲜热点', '旧热点']);
   assert.equal(result.topics[0].summary, '近期 话题摘要');
   assert.equal(result.topics[0].publishedAt, '2026-10-19T10:00:00.000Z');
@@ -58,11 +60,27 @@ test('topic search uses audience labels, keeps older HTTPS results and prioritiz
   assert.equal(result.provider, 'Google News');
 });
 test('topic search falls back to Bing when Google has no AI-relevant entries', async () => {
-  let calls = 0;
+  let classifications = 0; const providers = [];
   const stale = '<rss><channel><item><title>旧热点</title><link>https://news.example/old</link><description>旧摘要</description><pubDate>Mon, 01 Jun 2026 10:00:00 GMT</pubDate></item></channel></rss>';
   const fresh = '<rss><channel><item><title>新热点</title><link>https://news.example/new</link><description>近期摘要</description><pubDate>Mon, 19 Oct 2026 10:00:00 GMT</pubDate></item></channel></rss>';
-  const result = await searchTopics({ audience: '大学新生', product: 'MateBook', now: () => Date.parse('2026-10-20T00:00:00Z'), classify: async topics => calls === 1 ? [] : topics.map(topic => ({ ...topic, tag: '学习效率', angle: '结合线上学习' })), transport: async () => ({ ok: true, text: async () => ++calls === 1 ? stale : fresh }) });
-  assert.equal(calls, 2); assert.equal(result.provider, 'Bing News'); assert.equal(result.topics[0].title, '新热点');
+  const result = await searchTopics({ audience: '大学新生', product: 'MateBook', now: () => Date.parse('2026-10-20T00:00:00Z'), classify: async topics => ++classifications === 1 ? [] : topics.map(topic => ({ ...topic, tag: '学习效率', angle: '结合线上学习' })), transport: async url => { const bing = new URL(url).hostname.includes('bing'); providers.push(bing ? 'Bing' : 'Google'); return { ok: true, text: async () => bing ? fresh : stale }; } });
+  assert.equal(providers.length, 6); assert.equal(classifications, 2); assert.equal(result.provider, 'Bing News'); assert.equal(result.topics[0].title, '新热点');
+});
+test('topic search interleaves query feeds so irrelevant fresh results cannot crowd out another angle', async () => {
+  const item = (title, date) => `<item><title>${title}</title><link>https://news.example/${encodeURIComponent(title)}</link><description>摘要</description><pubDate>${date}</pubDate></item>`;
+  const crowded = Array.from({ length: 30 }, (_, index) => item(`无关天气新闻${index}`, 'Mon, 19 Oct 2026 10:00:00 GMT')).join('');
+  let received;
+  await searchTopics({ audience: '大学新生', product: 'MateBook', classify: async topics => { received = topics; return topics.filter(topic => topic.title.includes('笔记本')); }, transport: async url => ({ ok: true, text: async () => `<rss><channel>${url.searchParams.get('q').includes('开学季') ? item('开学季笔记本新品消息', 'Mon, 01 Jun 2026 10:00:00 GMT') : crowded}</channel></rss>` }) });
+  assert.equal(received.length, 18);
+  assert.equal(received[1].title, '开学季笔记本新品消息');
+});
+test('topic search recovers from feed body errors and never treats a gateway page as an empty search', async () => {
+  const result = await searchTopics({ audience: '大学新生', product: 'MateBook', classify: async topics => topics, transport: async url => ({ ok: true, text: async () => {
+    if (url.hostname.includes('google')) throw new Error('broken body');
+    return '<rss><channel><item><title>开学购机</title><link>https://news.example/pc</link><description>电脑换新</description><pubDate>Mon, 01 Jun 2026 10:00:00 GMT</pubDate></item></channel></rss>';
+  } }) });
+  assert.equal(result.provider, 'Bing News'); assert.equal(result.topics.length, 1);
+  await assert.rejects(searchTopics({ audience: '大学新生', product: 'MateBook', classify: async () => [], transport: async () => ({ ok: true, text: async () => '<html>Gateway Timeout</html>' }) }), /热点搜索服务暂不可用/);
 });
 test('real reference evidence, platform image counts and honest pending checks', async () => {
   const list = await products(); assert.ok(list.length >= 3);

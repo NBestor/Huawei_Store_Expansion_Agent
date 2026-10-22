@@ -9,6 +9,7 @@ import { products } from '../lib/local.mjs';
 import { dependency } from '../lib/dependencies.mjs';
 import { createApp } from '../server.mjs';
 import { chooseOfficialImages } from '../lib/marketing-images.mjs';
+import reviewedPhotoIndex from '../../官网产品照片集/照片索引.json' with { type: 'json' };
 
 test('official image extraction rejects foreign hosts and merges responsive variants', () => {
   const page = 'https://consumer.huawei.com/cn/laptops/test/';
@@ -122,6 +123,21 @@ test('automatic image selection starts with a hero and varies subjects by audien
   assert.equal(new Set(selected.map(image => image.id)).size, 3);
   assert.ok(selected.some(image => image.id === 'eyecare-screen'));
   assert.ok(selected.filter(image => /color/.test(image.id)).length <= 1);
+});
+
+test('reviewed official photo labels exclude unsuitable assets and describe selected images', () => {
+  const productId = reviewedPhotoIndex[0].productId;
+  const productImages = reviewedPhotoIndex.filter(item => item.productId === productId);
+  const images = productImages.map((item, index) => ({
+    productId, sourceUrl: item.sourceUrl, description: '旧缓存中的通用描述', id: String(index), url: `/api/official-image/${index}`
+  }));
+  const selected = chooseOfficialImages(images, { productId, platform: 'xiaohongshu', audience: '大学新生', scene: '学习' });
+  assert.ok(selected.length > 0);
+  assert.ok(selected.every(image => image.autoEligible !== false));
+  assert.ok(selected.every(image => image.description.startsWith('画面已核对：')));
+  const excludedUrls = productImages.filter(image => !image.autoEligible).map(image => image.sourceUrl);
+  assert.ok(excludedUrls.length > 0);
+  assert.ok(!selected.some(image => excludedUrls.includes(image.sourceUrl)));
 });
 
 test('old galleries exclude placeholder and badge images and merge mobile variants', () => {

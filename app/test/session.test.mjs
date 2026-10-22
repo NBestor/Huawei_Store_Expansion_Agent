@@ -66,6 +66,28 @@ test('verification requires exact evidence and distinguishes warning from confli
   ] }, current, chunks, 'test');
   assert.equal(report.claims[0].status, 'verified'); assert.equal(report.claims[1].status, 'warning'); assert.equal(report.status, 'warning');
 });
+test('verification excludes editorial invitations, tags and scene rhetoric but keeps unsupported product effects', () => {
+  const chunks = [{ id: 'S1', path: 'P1/事实.md', kind: 'local', text: '屏幕比例为3:2。' }];
+  const current = {
+    title: '这台 MateBook 14 很懂校园学习',
+    body: '屏幕比例为3:2。续航一整天不用充电。',
+    cta: '欢迎私信咨询在售配置，或来店里亲手体验。',
+    tags: '#大学新生 #校园学习',
+  };
+  const report = normalizeVerification({ summary: '完成', claims: [
+    { field: 'title', statement: current.title, status: 'warning', explanation: '未找到依据', evidence: [] },
+    { field: 'body', statement: '屏幕比例为3:2。', status: 'warning', explanation: '漏引', evidence: [] },
+    { field: 'body', statement: '续航一整天不用充电。', status: 'warning', explanation: '未找到依据', evidence: [] },
+    { field: 'cta', statement: current.cta, status: 'warning', explanation: '未找到依据', evidence: [] },
+    { field: 'tags', statement: current.tags, status: 'warning', explanation: '未找到依据', evidence: [] },
+  ] }, current, chunks, 'test');
+  assert.deepEqual(report.counts, { verified: 1, warning: 1, conflict: 0 });
+  assert.equal(report.claims.some(claim => claim.statement === current.cta), false);
+  assert.equal(report.claims.some(claim => claim.statement === current.tags), false);
+  assert.equal(report.claims.some(claim => claim.statement === current.title), false);
+  assert.equal(report.claims.find(claim => claim.statement === '屏幕比例为3:2。').status, 'verified');
+  assert.equal(report.claims.find(claim => claim.statement === '续航一整天不用充电。').status, 'warning');
+});
 test('P1 tool index is product scoped and vmall whitelist is exact', async () => {
   const product = (await products())[0], tools = new FactTools(product);
   const index = await tools.index(); assert.ok(index.length >= 1); assert.ok(index.every(item => item.productId === product.id && /产品事实|卖点与限制/.test(item.path)));
